@@ -1,0 +1,792 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="X-UA-Compatible" content="ie=edge" />
+    <title>Markmap</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+      }
+      #mindmap {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+      }
+    </style>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/markmap-toolbar@0.17.3-alpha.1/dist/style.css"
+    />
+  </head>
+  <body>
+    <svg id="mindmap"></svg>
+    <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/markmap-view@0.17.3-alpha.1/dist/browser/index.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/markmap-toolbar@0.17.3-alpha.1/dist/index.js"></script>
+    <script>
+      (() => {
+        setTimeout(() => {
+          const { markmap: q, mm: v } = window,
+            j = new q.Toolbar();
+          j.attach(v);
+          const we = j.render();
+          we.setAttribute('style', 'position:absolute;bottom:20px;right:20px'),
+            document.body.append(we);
+        });
+      })();
+    </script>
+    <script>
+      ((f, d, h, u) => {
+        const g = f();
+        window.mm = g.Markmap.create(
+          'svg#mindmap',
+          (d || g.deriveOptions)(u),
+          h
+        );
+      })(
+        () => window.markmap,
+        null,
+        {
+          content: 'Product Taxonomy',
+          children: [
+            {
+              content: 'Puertas',
+              children: [
+                {
+                  content: 'Aluminio',
+                  children: [
+                    {
+                      content: 'Serie',
+                      children: [
+                        {
+                          content: '1400 (Profilo)',
+                          children: [
+                            {
+                              content: 'Simple: Puerta1400',
+                              children: [],
+                              payload: { lines: '6,7' },
+                            },
+                            {
+                              content: 'Doble: Puerta1400Dobles',
+                              children: [],
+                              payload: { lines: '7,8' },
+                            },
+                          ],
+                          payload: { lines: '5,8' },
+                        },
+                        {
+                          content: '1400 (Cuprum): Puerta1400Cuprum',
+                          children: [],
+                          payload: { lines: '8,9' },
+                        },
+                        {
+                          content: '3500 (Indalum): PuertaSerie3500',
+                          children: [],
+                          payload: { lines: '9,10' },
+                        },
+                        {
+                          content: '50 (Cuprum): PuertaSerie50',
+                          children: [],
+                          payload: { lines: '10,11' },
+                        },
+                      ],
+                      payload: { lines: '4,11' },
+                    },
+                    {
+                      content: 'Económica (2 pulgadas): PuertaEconomica',
+                      children: [],
+                      payload: { lines: '11,12' },
+                    },
+                    {
+                      content: '3/4 (1750, 1.75")',
+                      children: [
+                        {
+                          content: 'Simple: PuertaUnatrescuartos',
+                          children: [],
+                          payload: { lines: '13,14' },
+                        },
+                        {
+                          content: 'Doble: PuertaUnatrescuartosDoble',
+                          children: [],
+                          payload: { lines: '14,15' },
+                        },
+                        {
+                          content: 'Corrediza: PuertaUnatrescuartosCorrediza',
+                          children: [],
+                          payload: { lines: '15,16' },
+                        },
+                      ],
+                      payload: { lines: '12,16' },
+                    },
+                    {
+                      content: '3 pulgadas',
+                      children: [
+                        {
+                          content: 'Simple: Puerta3inUnaVista',
+                          children: [],
+                          payload: { lines: '17,18' },
+                        },
+                        {
+                          content: 'Doble: Puerta3inUnaVistaDobles',
+                          children: [],
+                          payload: { lines: '18,19' },
+                        },
+                        {
+                          content: 'Corrediza: Puerta3inCorrediza',
+                          children: [],
+                          payload: { lines: '19,20' },
+                        },
+                      ],
+                      payload: { lines: '16,20' },
+                    },
+                    {
+                      content: 'Residencial Serie 50',
+                      children: [
+                        {
+                          content: 'Zoclo 10: PuertaResidencialZoclo10',
+                          children: [],
+                          payload: { lines: '21,22' },
+                        },
+                        {
+                          content: 'Sin Zoclo 10: PuertaResidencialSinZoclo10',
+                          children: [],
+                          payload: { lines: '22,23' },
+                        },
+                      ],
+                      payload: { lines: '20,23' },
+                    },
+                  ],
+                  payload: { lines: '3,23' },
+                },
+                {
+                  content: 'Templado',
+                  children: [
+                    {
+                      content: 'Hidráulico',
+                      children: [
+                        {
+                          content: 'Simple: PuertaTempladaHidraulicaSimple',
+                          children: [],
+                          payload: { lines: '25,26' },
+                        },
+                        {
+                          content: 'Doble: PuertaTempladaHidraulicaDoble',
+                          children: [],
+                          payload: { lines: '26,27' },
+                        },
+                      ],
+                      payload: { lines: '24,27' },
+                    },
+                    {
+                      content: 'Pivote: PuertaTempladoPivote',
+                      children: [],
+                      payload: { lines: '27,28' },
+                    },
+                    {
+                      content: 'Chetumal/Huatulco: PuertaChetumal',
+                      children: [],
+                      payload: { lines: '28,29' },
+                    },
+                  ],
+                  payload: { lines: '23,29' },
+                },
+                {
+                  content: 'Mosquitero: PuertaMosquitero',
+                  children: [],
+                  payload: { lines: '29,30' },
+                },
+                {
+                  content: 'Automática: PuertaAutomatica',
+                  children: [],
+                  payload: { lines: '30,31' },
+                },
+              ],
+              payload: { lines: '2,31' },
+            },
+            {
+              content: 'Ventanas',
+              children: [
+                {
+                  content: 'Corrediza',
+                  children: [
+                    {
+                      content: 'Series',
+                      children: [
+                        {
+                          content: 'Finestra (Profilo): VentanaFinestra',
+                          children: [],
+                          payload: { lines: '34,35' },
+                        },
+                        {
+                          content: 'Ragazza (Profilo): VentanaRagazza',
+                          children: [],
+                          payload: { lines: '35,36' },
+                        },
+                        {
+                          content: '4600 (Extrusiones Metálicas): Ventana4600',
+                          children: [],
+                          payload: { lines: '36,37' },
+                        },
+                        {
+                          content:
+                            '10000 (Extrusiones Metálicas): Ventana10000',
+                          children: [],
+                          payload: { lines: '37,38' },
+                        },
+                        {
+                          content: '4000 (Indalum)',
+                          children: [
+                            {
+                              content: 'Simple: Ventana4000Simple',
+                              children: [],
+                              payload: { lines: '39,40' },
+                            },
+                            {
+                              content: 'Hoja Puerta: Ventana4000HojaPuerta',
+                              children: [],
+                              payload: { lines: '40,41' },
+                            },
+                          ],
+                          payload: { lines: '38,41' },
+                        },
+                        {
+                          content: '4500 (Indalum)',
+                          children: [
+                            {
+                              content: 'Riel Bajo: Ventana4500RielBajo',
+                              children: [],
+                              payload: { lines: '42,43' },
+                            },
+                            {
+                              content: 'Riel Normal: Ventana4500RielNormal',
+                              children: [],
+                              payload: { lines: '43,44' },
+                            },
+                          ],
+                          payload: { lines: '41,44' },
+                        },
+                        {
+                          content: '4100 (Alugama)',
+                          children: [
+                            {
+                              content: 'Altas: Ventana4100Altas',
+                              children: [],
+                              payload: { lines: '45,46' },
+                            },
+                            {
+                              content: 'Bajas: Ventana4100Bajas',
+                              children: [],
+                              payload: { lines: '46,47' },
+                            },
+                          ],
+                          payload: { lines: '44,47' },
+                        },
+                        {
+                          content: '5100 (Indalum): Ventana5100',
+                          children: [],
+                          payload: { lines: '47,48' },
+                        },
+                        {
+                          content: '2500 (Indalum): Ventana2500',
+                          children: [],
+                          payload: { lines: '48,49' },
+                        },
+                        {
+                          content: '3500 (Profilo): Ventana3500',
+                          children: [],
+                          payload: { lines: '49,50' },
+                        },
+                        {
+                          content: '70 (Cuprum): Ventana70',
+                          children: [],
+                          payload: { lines: '50,51' },
+                        },
+                        {
+                          content: '2800 (Indalum): Ventana2800',
+                          children: [],
+                          payload: { lines: '51,52' },
+                        },
+                      ],
+                      payload: { lines: '33,52' },
+                    },
+                    {
+                      content: '2 pulgadas: VentanaCorrediza2in',
+                      children: [],
+                      payload: { lines: '52,53' },
+                    },
+                    {
+                      content: '1.5 pulgadas: VentanaCorredizaUnayMedia',
+                      children: [],
+                      payload: { lines: '53,54' },
+                    },
+                  ],
+                  payload: { lines: '32,54' },
+                },
+                {
+                  content: 'Fija/Sifon',
+                  children: [
+                    {
+                      content: 'Series',
+                      children: [
+                        {
+                          content: '3100: VentanaFija3100',
+                          children: [],
+                          payload: { lines: '56,57' },
+                        },
+                        {
+                          content: '3500 (Indalum): VentanaFija3500',
+                          children: [],
+                          payload: { lines: '57,58' },
+                        },
+                        {
+                          content: '1400: VentanaFija1400',
+                          children: [],
+                          payload: { lines: '58,59' },
+                        },
+                      ],
+                      payload: { lines: '55,59' },
+                    },
+                    {
+                      content: 'Sifon: VentanaSifon',
+                      children: [],
+                      payload: { lines: '59,60' },
+                    },
+                    {
+                      content: '2 pulgadas: VentanaFija2pulgadas',
+                      children: [],
+                      payload: { lines: '60,61' },
+                    },
+                    {
+                      content: '1.5 pulgadas: VentanaFijaUnayMedia',
+                      children: [],
+                      payload: { lines: '61,62' },
+                    },
+                  ],
+                  payload: { lines: '54,62' },
+                },
+                {
+                  content: 'Proyección/Abatible',
+                  children: [
+                    {
+                      content: '3100/Alugama/Forza: VentanaProyeccion3100',
+                      children: [],
+                      payload: { lines: '63,64' },
+                    },
+                    {
+                      content: 'Cuprum',
+                      children: [
+                        {
+                          content:
+                            '1400 Simple: VentanaSerie1400ProyectableSimple',
+                          children: [],
+                          payload: { lines: '65,66' },
+                        },
+                        {
+                          content:
+                            '1400 Doble: VentanaSerie1400ProyectableDoble',
+                          children: [],
+                          payload: { lines: '66,67' },
+                        },
+                      ],
+                      payload: { lines: '64,67' },
+                    },
+                    {
+                      content: 'Serie 35: VentanaProyeccionSerie35',
+                      children: [],
+                      payload: { lines: '67,68' },
+                    },
+                  ],
+                  payload: { lines: '62,68' },
+                },
+                {
+                  content: 'Bandera',
+                  children: [
+                    {
+                      content: 'Económica: VentanaAbatibleEconomica',
+                      children: [],
+                      payload: { lines: '69,70' },
+                    },
+                  ],
+                  payload: { lines: '68,70' },
+                },
+                {
+                  content: 'Guillotina: VentanaGuillotina',
+                  children: [],
+                  payload: { lines: '70,71' },
+                },
+                {
+                  content: 'Escuadra: VentanaEscuadra',
+                  children: [],
+                  payload: { lines: '71,72' },
+                },
+                {
+                  content: 'Vassista (Cuprum 1400): Serie1400Vassista',
+                  children: [],
+                  payload: { lines: '72,73' },
+                },
+              ],
+              payload: { lines: '31,73' },
+            },
+            {
+              content: 'Cancel',
+              children: [
+                {
+                  content: 'Baño',
+                  children: [
+                    {
+                      content: 'Templado',
+                      children: [
+                        {
+                          content: 'Corredizo',
+                          children: [
+                            {
+                              content:
+                                'Simple (Bacalar/Cozumel): CancelBacalarCozumel',
+                              children: [],
+                              payload: { lines: '77,78' },
+                            },
+                            {
+                              content: 'Doble (Rio Bravo): CancelRioBravo',
+                              children: [],
+                              payload: { lines: '78,79' },
+                            },
+                          ],
+                          payload: { lines: '76,79' },
+                        },
+                        {
+                          content:
+                            'Abatible/Bandera/Puerta-Fijo: CancelTempladoAbatible',
+                          children: [],
+                          payload: { lines: '79,80' },
+                        },
+                        {
+                          content: 'Bruken: CancelBruken',
+                          children: [],
+                          payload: { lines: '80,81' },
+                        },
+                      ],
+                      payload: { lines: '75,81' },
+                    },
+                    {
+                      content: 'Con Marco',
+                      children: [
+                        {
+                          content: 'Simple: CancelConMarcoSimple',
+                          children: [],
+                          payload: { lines: '82,83' },
+                        },
+                        {
+                          content: 'Escuadra: CancelConMarcoEscuadra',
+                          children: [],
+                          payload: { lines: '83,84' },
+                        },
+                      ],
+                      payload: { lines: '81,84' },
+                    },
+                  ],
+                  payload: { lines: '74,84' },
+                },
+                {
+                  content: 'Plegable/Plegadizo: CancelPlegadizo',
+                  children: [],
+                  payload: { lines: '84,85' },
+                },
+                {
+                  content: 'Vitrina: CancelVitrina',
+                  children: [],
+                  payload: { lines: '85,86' },
+                },
+                {
+                  content: 'Alacena/Puertitas',
+                  children: [
+                    {
+                      content: 'Simples: PuertitasAlacenaSimples',
+                      children: [],
+                      payload: { lines: '87,88' },
+                    },
+                    {
+                      content: 'Dobles: PuertitasAlacenaDobles',
+                      children: [],
+                      payload: { lines: '88,89' },
+                    },
+                  ],
+                  payload: { lines: '86,89' },
+                },
+              ],
+              payload: { lines: '73,89' },
+            },
+            {
+              content: 'Puertita',
+              children: [
+                {
+                  content: 'Corrediza: PuertitaCorrediza',
+                  children: [],
+                  payload: { lines: '90,91' },
+                },
+                {
+                  content: 'Abatible',
+                  children: [
+                    {
+                      content: 'Simples: PuertitaAbatibleSimple',
+                      children: [],
+                      payload: { lines: '92,93' },
+                    },
+                    {
+                      content: 'Dobles: PuertitaAbatibleDoble',
+                      children: [],
+                      payload: { lines: '93,94' },
+                    },
+                  ],
+                  payload: { lines: '91,94' },
+                },
+              ],
+              payload: { lines: '89,94' },
+            },
+            {
+              content: 'Vitrina',
+              children: [
+                {
+                  content: 'Mostrador: VitrinaMostrador',
+                  children: [],
+                  payload: { lines: '95,96' },
+                },
+                {
+                  content: 'De Pared: VitrinaDePared',
+                  children: [],
+                  payload: { lines: '96,97' },
+                },
+              ],
+              payload: { lines: '94,97' },
+            },
+            {
+              content: 'Ventanal',
+              children: [
+                {
+                  content: 'Corredizo',
+                  children: [
+                    {
+                      content: '2 pulgadas: VentanalCorredizo2in',
+                      children: [],
+                      payload: { lines: '99,100' },
+                    },
+                    {
+                      content: '3 pulgadas: VentanalCorredizo3in',
+                      children: [],
+                      payload: { lines: '100,101' },
+                    },
+                  ],
+                  payload: { lines: '98,101' },
+                },
+                {
+                  content: 'Plegable/Plegadizo',
+                  children: [
+                    {
+                      content: '3 pulgadas: VentanalPlegadizo3pulgadas',
+                      children: [],
+                      payload: { lines: '102,103' },
+                    },
+                    {
+                      content: 'Fisarmonica: VentanalPlegadizoFisarmonica',
+                      children: [],
+                      payload: { lines: '103,104' },
+                    },
+                  ],
+                  payload: { lines: '101,104' },
+                },
+                {
+                  content: 'Fijo: VentanalFijo',
+                  children: [],
+                  payload: { lines: '104,105' },
+                },
+                {
+                  content: 'Abatible: VentanalAbatible',
+                  children: [],
+                  payload: { lines: '105,106' },
+                },
+              ],
+              payload: { lines: '97,106' },
+            },
+            {
+              content: 'Espejo/Luna',
+              children: [
+                {
+                  content: 'Flotado: EspejoFlotado',
+                  children: [],
+                  payload: { lines: '107,108' },
+                },
+                {
+                  content: 'Con Marco',
+                  children: [
+                    {
+                      content: 'Madera: EspejoConMarcoMadera',
+                      children: [],
+                      payload: { lines: '109,110' },
+                    },
+                    {
+                      content: 'Semilujo: EspejoConMarcoSemilujo',
+                      children: [],
+                      payload: { lines: '110,111' },
+                    },
+                  ],
+                  payload: { lines: '108,111' },
+                },
+              ],
+              payload: { lines: '106,111' },
+            },
+            {
+              content: 'Domo/Tragaluz',
+              children: [
+                {
+                  content: 'Plano: DomoPlano',
+                  children: [],
+                  payload: { lines: '112,113' },
+                },
+                {
+                  content: 'Arco Cañón: DomoArcoCanon',
+                  children: [],
+                  payload: { lines: '113,114' },
+                },
+                {
+                  content: 'Automático: DomoAutomatico',
+                  children: [],
+                  payload: { lines: '114,115' },
+                },
+                {
+                  content: 'Abatible: DomoAbatible',
+                  children: [],
+                  payload: { lines: '115,116' },
+                },
+              ],
+              payload: { lines: '111,116' },
+            },
+            {
+              content: 'Cubierta (de mesa): CubiertaMesa',
+              children: [],
+              payload: { lines: '116,117' },
+            },
+            {
+              content: 'Fachada',
+              children: [
+                {
+                  content: 'Arañas: FachadaAranas',
+                  children: [],
+                  payload: { lines: '118,119' },
+                },
+                {
+                  content: 'Estructura de Aluminio: FachadaEstructuraAluminio',
+                  children: [],
+                  payload: { lines: '119,120' },
+                },
+                {
+                  content: 'Alocoubon: FachadaAlocoubon',
+                  children: [],
+                  payload: { lines: '120,121' },
+                },
+                {
+                  content: 'Pipetas: FachadaPipetas',
+                  children: [],
+                  payload: { lines: '121,122' },
+                },
+              ],
+              payload: { lines: '117,122' },
+            },
+            {
+              content: 'Mosquitero (sin puerta)',
+              children: [
+                {
+                  content: 'Corredizo',
+                  children: [
+                    {
+                      content: 'Simple: MosquiteroCorredizoSimple',
+                      children: [],
+                      payload: { lines: '124,125' },
+                    },
+                    {
+                      content: 'Doble: MosquiteroCorredizoDoble',
+                      children: [],
+                      payload: { lines: '125,126' },
+                    },
+                  ],
+                  payload: { lines: '123,126' },
+                },
+                {
+                  content: 'Colgante: MosquiteroColgante',
+                  children: [],
+                  payload: { lines: '126,127' },
+                },
+                {
+                  content: 'Fijo: MosquiteroFijo',
+                  children: [],
+                  payload: { lines: '127,128' },
+                },
+                {
+                  content: 'Z/Celosia: MosquiteroZ',
+                  children: [],
+                  payload: { lines: '128,129' },
+                },
+                {
+                  content: 'Cambio de Tela: CambioTela',
+                  children: [],
+                  payload: { lines: '129,130' },
+                },
+              ],
+              payload: { lines: '122,130' },
+            },
+            {
+              content: 'Mampara',
+              children: [
+                {
+                  content: 'Vidrio: MamparaVidrio',
+                  children: [],
+                  payload: { lines: '131,132' },
+                },
+                {
+                  content: 'Madera/MDF/Triplay/Melamina: MamparaMadera',
+                  children: [],
+                  payload: { lines: '132,133' },
+                },
+                {
+                  content: 'Duela: MamparaDuela',
+                  children: [],
+                  payload: { lines: '133,134' },
+                },
+                {
+                  content: 'Acrílico: MamparaAcrilico',
+                  children: [],
+                  payload: { lines: '134,135' },
+                },
+              ],
+              payload: { lines: '130,135' },
+            },
+            {
+              content: 'Barandal',
+              children: [
+                {
+                  content: 'Escalera: BarandalEscalera',
+                  children: [],
+                  payload: { lines: '136,137' },
+                },
+                {
+                  content: 'Balcón: BarandalBalcon',
+                  children: [],
+                  payload: { lines: '137,138' },
+                },
+              ],
+              payload: { lines: '135,138' },
+            },
+            {
+              content: 'Película/Vinil (sola): PeliculaSola',
+              children: [],
+              payload: { lines: '138,139' },
+            },
+          ],
+          payload: { lines: '0,1' },
+        },
+        null
+      );
+    </script>
+  </body>
+</html>
