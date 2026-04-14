@@ -2,6 +2,7 @@ import api from 'axios';
 import dotenv from 'dotenv';
 import { Request } from 'express';
 import fs from 'fs';
+import mongoose from 'mongoose';
 import OpenAI from 'openai';
 import os from 'os';
 import path from 'path';
@@ -11,7 +12,7 @@ import { convert } from '../mapper/index';
 import Admin from '../src/admin.js';
 import Cliente from '../src/chat.js';
 import { generatePrompt } from '../src/prompt.js';
-//import { startAutoStatuses } from '../src/services/autoStatus.js';
+import { startAutoStatuses } from '../src/services/autoStatus.js';
 //import { registrarComprobantePago } from '../src/services/recibosService';
 import { handleToolCalls } from '../src/services/toolService.js';
 import { tools } from '../src/tools';
@@ -196,6 +197,11 @@ async function resolveDisplayName(
 }
 
 /** URL o base64 de la miniatura de perfil que envía WPPConnect en el mensaje. */
+/** 24 hex (ObjectId); evita tratar "gabriel" u otros nombres de sesión como _id. */
+function looksLikeMongoObjectId(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-fA-F0-9]{24}$/.test(value);
+}
+
 function getProfileImageFromMessage(message: any): string | undefined {
   if (!message || typeof message !== 'object') return undefined;
   const thumb =
@@ -228,7 +234,23 @@ export async function autoDownload(
   try {
     // Filtros iniciales
     if (/broadcast|newsletter|@g.us|@broadcast/.test(message.from)) return null;
-    const admin = await Admin.findOne({ _id: message.session });
+
+    const sessionKey = String(
+      (message as { session?: string }).session ?? client?.session ?? ''
+    ).trim();
+    let admin: { celular?: string } | null = null;
+    try {
+      if (looksLikeMongoObjectId(sessionKey)) {
+        admin = await Admin.findOne({
+          _id: new mongoose.Types.ObjectId(sessionKey),
+        });
+      }
+      if (!admin && sessionKey) {
+        admin = await Admin.findOne({ session: sessionKey });
+      }
+    } catch {
+      admin = null;
+    }
     const SYSTEM_NUMBER = '521' + admin?.celular + '@c.us';
 
     // Comandos de control (Prender/Apagar)
@@ -392,7 +414,7 @@ export async function startAllSessions(config: any, logger: any) {
 }
 
 export async function startHelper(client: any, req: any) {
-  // await startAutoStatuses(client);
+  await startAutoStatuses(client);
   if (req.serverOptions.webhook.allUnreadOnStart) await sendUnread(client, req);
 
   if (req.serverOptions.archive.enable) await archive(client, req);

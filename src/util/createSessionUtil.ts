@@ -37,6 +37,24 @@ export default class CreateSessionUtil {
   /** Una sola limpieza por sesión a la vez; las demás esperan la misma promesa */
   private static killChromeProcessesPromises = new Map<string, Promise<void>>();
 
+  /**
+   * Serializa crear/cerrar/reiniciar navegador por sesión para evitar
+   * `SingletonLock: File exists` cuando varios handlers disparan reinicio a la vez.
+   * El reinicio interno llama a {@link createSessionUtilCore} (sin re-encolar) para no bloquearse.
+   */
+  private static sessionOpChain = new Map<string, Promise<unknown>>();
+
+  private runWithSessionQueue<T>(
+    session: string,
+    fn: () => Promise<T>
+  ): Promise<T> {
+    const prev =
+      CreateSessionUtil.sessionOpChain.get(session) ?? Promise.resolve();
+    const next = prev.catch(() => {}).then(fn);
+    CreateSessionUtil.sessionOpChain.set(session, next);
+    return next as Promise<T>;
+  }
+
   /** Límite de líneas de consola por sesión para "Waiting for QRCode Scan" (evita spam en sesiones sin vincular). */
   private static readonly MAX_QR_CONSOLE_LOGS = 2;
   private static qrWaitLogCountBySession = new Map<string, number>();
@@ -219,10 +237,15 @@ export default class CreateSessionUtil {
         }
       } else {
         try {
-          await execAsync(`pkill -f "chrome.*${sessionName}" || true`);
-          await execAsync(`pkill -f "chromium.*${sessionName}" || true`);
-          logger.info(`[${session}] Procesos de Chrome terminados (Linux/Mac)`);
-          await new Promise((resolve) => setTimeout(resolve, 2000));
+          // pkill -f usa regex: escapar la ruta para no matar procesos equivocados.
+          const esc = normalizedPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          await execAsync(`pkill -9 -f "${esc}" || true`, {
+            maxBuffer: 10 * 1024 * 1024,
+          });
+          logger.info(`[${session}] pkill por userDataDir (Linux/Mac)`);
+          await new Promise((resolve) => setTimeout(resolve, 2500));
+          this.removeChromeProfileLocks(normalizedPath, logger, session);
+          await new Promise((resolve) => setTimeout(resolve, 400));
           this.removeChromeProfileLocks(normalizedPath, logger, session);
         } catch (e) {
           /* Ignorar */
@@ -248,6 +271,17 @@ export default class CreateSessionUtil {
   }
 
   async createSessionUtil(
+    req: any,
+    clientsArray: any,
+    session: string,
+    res?: any
+  ) {
+    return this.runWithSessionQueue(session, () =>
+      this.createSessionUtilCore(req, clientsArray, session, res)
+    );
+  }
+
+  private async createSessionUtilCore(
     req: any,
     clientsArray: any,
     session: string,
@@ -311,11 +345,19 @@ export default class CreateSessionUtil {
           timeout: 300000, // Timeout general de Puppeteer
           // Opciones adicionales para mejorar estabilidad
           headless: true,
+          /**
+           * Al cerrar SSH o el TTY de la sesión, el SO puede enviar SIGHUP; Puppeteer por defecto
+           * cierra Chromium ante SIGHUP (parece "solo funciona mientras veo pm2 logs").
+           */
+          handleSIGHUP: false,
+          handleSIGINT: true,
+          handleSIGTERM: true,
           args: [
             ...(req.serverOptions.createOptions.browserArgs || []),
             '--disable-dev-shm-usage', // Evitar problemas de memoria compartida
             '--disable-gpu', // Deshabilitar GPU para reducir carga
             '--no-zygote', // Evitar problemas de procesos
+            '--disable-setuid-sandbox', // Servidor Linux / contenedor sin sandbox de setuid
             // No usar --single-process: Chromium puede dejar el perfil bloqueado y dispara "already running"
           ],
         };
@@ -324,8 +366,22 @@ export default class CreateSessionUtil {
         if (!req.serverOptions.createOptions.puppeteerOptions) {
           req.serverOptions.createOptions.puppeteerOptions = {};
         }
-        req.serverOptions.createOptions.puppeteerOptions.protocolTimeout = 300000;
-        req.serverOptions.createOptions.puppeteerOptions.timeout = 300000;
+        const po = req.serverOptions.createOptions.puppeteerOptions as Record<
+          string,
+          unknown
+        >;
+        po.protocolTimeout = 300000;
+        po.timeout = 300000;
+        po.handleSIGHUP = false;
+        po.handleSIGINT = true;
+        po.handleSIGTERM = true;
+      }
+
+      if (req.serverOptions.customUserDataDir) {
+        const profileDir = path.resolve(
+          req.serverOptions.customUserDataDir + session
+        );
+        this.removeChromeProfileLocks(profileDir, req.logger, session);
       }
 
       const wppLogger =
@@ -451,7 +507,10 @@ export default class CreateSessionUtil {
         errorMessage.includes('Code: 0') ||
         errorMessage.includes('already running') ||
         errorMessage.includes('Target closed') ||
-        errorMessage.includes('Session closed')
+        errorMessage.includes('Session closed') ||
+        errorMessage.includes('SingletonLock') ||
+        errorMessage.includes('socket hang up') ||
+        errorMessage.includes('shared_memory_switch')
       ) {
         if (isTimeoutError) {
           req.logger.warn(
@@ -472,9 +531,12 @@ export default class CreateSessionUtil {
         const client = this.getClient(session) as any;
 
         // Si el error es "already running", necesitamos cerrar primero
-        if (errorMessage.includes('already running')) {
+        if (
+          errorMessage.includes('already running') ||
+          errorMessage.includes('SingletonLock')
+        ) {
           req.logger.warn(
-            `[${session}] Navegador todavía corriendo, forzando cierre...`
+            `[${session}] Navegador o lock de perfil presente, forzando cierre...`
           );
           try {
             // Obtener el userDataDir para matar procesos específicos
@@ -572,90 +634,92 @@ export default class CreateSessionUtil {
       `[${session}] Programando reinicio del navegador en ${backoffDelay}ms (intento ${client._restartAttempts}/10)...`
     );
 
-    setTimeout(async () => {
-      try {
-        req.logger.info(`[${session}] Cerrando navegador anterior...`);
+    setTimeout(() => {
+      void this.runWithSessionQueue(session, async () => {
+        try {
+          req.logger.info(`[${session}] Cerrando navegador anterior...`);
 
-        // Obtener el userDataDir para matar procesos específicos
-        const userDataDir = req.serverOptions.customUserDataDir
-          ? req.serverOptions.customUserDataDir + session
-          : null;
+          // Obtener el userDataDir para matar procesos específicos
+          const userDataDir = req.serverOptions.customUserDataDir
+            ? req.serverOptions.customUserDataDir + session
+            : null;
 
-        // Matar procesos de Chrome que puedan estar bloqueando el userDataDir
-        if (userDataDir) {
-          req.logger.info(
-            `[${session}] Matando procesos de Chrome para userDataDir: ${userDataDir}`
-          );
-          await this.killChromeProcessesForUserDataDir(
-            userDataDir,
-            req.logger,
-            session
-          );
-        }
+          // Matar procesos de Chrome que puedan estar bloqueando el userDataDir
+          if (userDataDir) {
+            req.logger.info(
+              `[${session}] Matando procesos de Chrome para userDataDir: ${userDataDir}`
+            );
+            await this.killChromeProcessesForUserDataDir(
+              userDataDir,
+              req.logger,
+              session
+            );
+          }
 
-        // Cerrar el cliente de forma más agresiva
-        if (client) {
-          try {
-            // Cerrar el browser de Puppeteer si existe
-            if (client.page && client.page.browser) {
-              const browser = client.page.browser();
-              if (browser && browser.isConnected()) {
-                await browser.close();
-                req.logger.info(`[${session}] Browser de Puppeteer cerrado`);
+          // Cerrar el cliente de forma más agresiva
+          if (client) {
+            try {
+              // Cerrar el browser de Puppeteer si existe
+              if (client.page && client.page.browser) {
+                const browser = client.page.browser();
+                if (browser && browser.isConnected()) {
+                  await browser.close();
+                  req.logger.info(`[${session}] Browser de Puppeteer cerrado`);
+                }
               }
+            } catch (e) {
+              req.logger.warn(
+                `[${session}] Error al cerrar browser de Puppeteer:`,
+                e
+              );
             }
-          } catch (e) {
-            req.logger.warn(
-              `[${session}] Error al cerrar browser de Puppeteer:`,
-              e
-            );
+
+            try {
+              // Cerrar el cliente de wppconnect
+              if (client.close) {
+                await client.close();
+                req.logger.info(`[${session}] Cliente wppconnect cerrado`);
+              }
+            } catch (e) {
+              req.logger.warn(
+                `[${session}] Error al cerrar cliente wppconnect:`,
+                e
+              );
+            }
           }
 
-          try {
-            // Cerrar el cliente de wppconnect
-            if (client.close) {
-              await client.close();
-              req.logger.info(`[${session}] Cliente wppconnect cerrado`);
-            }
-          } catch (e) {
-            req.logger.warn(
-              `[${session}] Error al cerrar cliente wppconnect:`,
-              e
-            );
+          // Limpiar del array
+          clientsArray[session] = undefined;
+
+          // Esperar más tiempo para asegurar que el proceso se haya cerrado completamente
+          req.logger.info(
+            `[${session}] Esperando 5 segundos para asegurar cierre completo...`
+          );
+          await new Promise((resolve) => setTimeout(resolve, 5000));
+
+          req.logger.info(`[${session}] Reiniciando navegador...`);
+
+          // Reiniciar la sesión (sin re-encolar: ya estamos dentro de runWithSessionQueue)
+          await this.createSessionUtilCore(req, clientsArray, session);
+
+          // Resetear contador de intentos si el reinicio fue exitoso
+          if (
+            clientsArray[session] &&
+            clientsArray[session].status === 'CONNECTED'
+          ) {
+            client._restartAttempts = 0;
+            req.logger.info(`[${session}] Navegador reiniciado exitosamente`);
           }
+        } catch (error) {
+          req.logger.error(`[${session}] Error al reiniciar navegador:`, error);
+          // Si falla, intentar de nuevo con más delay
+          if (client._restartAttempts < 10) {
+            this.handleBrowserRestart(req, session, client, backoffDelay);
+          }
+        } finally {
+          client._restarting = false;
         }
-
-        // Limpiar del array
-        clientsArray[session] = undefined;
-
-        // Esperar más tiempo para asegurar que el proceso se haya cerrado completamente
-        req.logger.info(
-          `[${session}] Esperando 5 segundos para asegurar cierre completo...`
-        );
-        await new Promise((resolve) => setTimeout(resolve, 5000));
-
-        req.logger.info(`[${session}] Reiniciando navegador...`);
-
-        // Reiniciar la sesión
-        await this.createSessionUtil(req, clientsArray, session);
-
-        // Resetear contador de intentos si el reinicio fue exitoso
-        if (
-          clientsArray[session] &&
-          clientsArray[session].status === 'CONNECTED'
-        ) {
-          client._restartAttempts = 0;
-          req.logger.info(`[${session}] Navegador reiniciado exitosamente`);
-        }
-      } catch (error) {
-        req.logger.error(`[${session}] Error al reiniciar navegador:`, error);
-        // Si falla, intentar de nuevo con más delay
-        if (client._restartAttempts < 10) {
-          this.handleBrowserRestart(req, session, client, backoffDelay);
-        }
-      } finally {
-        client._restarting = false;
-      }
+      });
     }, backoffDelay);
   }
 

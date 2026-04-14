@@ -105,7 +105,7 @@ export async function sendImageStorie(req: Request, res: Response) {
       },
     }
    */
-  const { path } = req.body;
+  const { path, caption } = req.body;
 
   if (!path && !req.file)
     return res.status(401).send({
@@ -113,10 +113,16 @@ export async function sendImageStorie(req: Request, res: Response) {
     });
 
   const pathFile = path || req.file?.path;
+  const captionTrim =
+    caption !== undefined && caption !== null && String(caption).trim() !== ''
+      ? String(caption).trim()
+      : undefined;
 
   try {
     const results: any = [];
-    results.push(await req.client.sendImageStatus(pathFile));
+    const statusOpts =
+      captionTrim !== undefined ? { caption: captionTrim } : undefined;
+    results.push(await req.client.sendImageStatus(pathFile, statusOpts));
 
     if (results.length === 0)
       return res.status(400).json('Error sending the image of stories');

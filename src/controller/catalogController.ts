@@ -301,29 +301,93 @@ export async function addProduct(req: Request, res: Response) {
     retailerId,
     currency = 'BRL',
   } = req.body;
-  if (!name || !image || !price)
+  if (!name || !image || price === undefined || price === null || price === '')
     return res.status(401).send({
       message: 'name, price and image was not informed',
     });
+
+  // wa-js createProduct: Product.priceAmount1000 = price * 10000.
+  // El ejemplo oficial usa price como monto en unidad principal (ej. 89.90), no centavos.
+  const priceNum =
+    typeof price === 'string' ? parseFloat(price) : Number(price);
+  if (Number.isNaN(priceNum) || priceNum < 0.01) {
+    return res.status(400).send({
+      message:
+        'price must be a positive number in main currency units (e.g. 1500.50 for MXN), per wa-js createProduct example',
+    });
+  }
+
+  const urlNorm =
+    url !== undefined && url !== null && String(url).trim() !== ''
+      ? String(url).trim()
+      : undefined;
+  const descNorm =
+    description !== undefined &&
+    description !== null &&
+    String(description).trim() !== ''
+      ? String(description).trim()
+      : undefined;
+  const retailerNorm =
+    retailerId !== undefined &&
+    retailerId !== null &&
+    String(retailerId).trim() !== ''
+      ? String(retailerId).trim()
+      : undefined;
+  const currencyNorm =
+    currency !== undefined &&
+    currency !== null &&
+    String(currency).trim() !== ''
+      ? String(currency).trim()
+      : undefined;
 
   try {
     const result = await req.client.createProduct(
       name,
       image,
-      description,
-      price,
+      descNorm,
+      priceNum,
       false,
-      url,
-      retailerId,
-      currency
+      urlNorm,
+      retailerNorm,
+      currencyNorm ?? 'BRL'
     );
     res.status(201).json({ status: 'success', response: result });
-  } catch (error) {
+  } catch (error: unknown) {
     console.log(error);
-    res.status(500).json({
+    const errObj = error as Record<string, unknown>;
+    const msg =
+      error instanceof Error
+        ? error.message
+        : typeof error === 'object' && error !== null && 'message' in error
+        ? String((error as { message: unknown }).message)
+        : 'Unknown error';
+    const upstreamStatus =
+      typeof error === 'object' &&
+      error !== null &&
+      'statusCode' in error &&
+      typeof (error as { statusCode: unknown }).statusCode === 'number'
+        ? (error as { statusCode: number }).statusCode
+        : undefined;
+    const status =
+      upstreamStatus === 400 || upstreamStatus === 403 || upstreamStatus === 429
+        ? upstreamStatus
+        : 500;
+    res.status(status).json({
       status: 'Error',
       message: 'Error on add product.',
-      error: error,
+      error: msg,
+      ...(upstreamStatus !== undefined && {
+        whatsappStatusCode: upstreamStatus,
+      }),
+      ...(errObj.messageFormat !== undefined && {
+        whatsappMessageFormat: errObj.messageFormat,
+      }),
+      ...(errObj.messageParams !== undefined && {
+        whatsappMessageParams: errObj.messageParams,
+      }),
+      ...(errObj.taalOpcodes !== undefined && {
+        whatsappTaalOpcodes: errObj.taalOpcodes,
+      }),
     });
   }
 }
