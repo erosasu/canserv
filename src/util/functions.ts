@@ -267,7 +267,9 @@ export async function autoDownload(
 
     const from = message.from;
     const account_id = client.session;
-    const isSystem = from === SYSTEM_NUMBER;
+    const isSystem =
+      client.session === 'gabriel' ||
+      client.session === '6490fc33b844a5d0f55ab865';
 
     const searchField = isSystem ? message.to : message.from;
     let phone = '';
@@ -316,7 +318,7 @@ export async function autoDownload(
       thread.messages = [
         {
           role: 'system',
-          content: (await generatePrompt(searchField, notifyName)).trim(),
+          content: 'Aqui comienza la conversacion',
           timeStamps: new Date(),
         },
       ];
@@ -358,41 +360,43 @@ export async function autoDownload(
       await thread.save();
 
       // Llamada a OpenAI para respuesta
-      try {
-        const response = await openai.chat.completions.create({
-          model: 'gpt-5-nano',
-          messages: thread.messages,
-          tools,
-          tool_choice: 'auto',
-        });
+      if (client.session === '6490fc33b844a5d0f55ab865') {
+        try {
+          const response = await openai.chat.completions.create({
+            model: 'gpt-5-nano',
+            messages: thread.messages,
+            tools,
+            tool_choice: 'auto',
+          });
 
-        const toolMessage = response.choices[0]?.message;
+          const toolMessage = response.choices[0]?.message;
 
-        if (toolMessage?.content && !toolMessage.tool_calls) {
-          if (switch_autoanswer) {
-            await client.startTyping(from);
+          if (toolMessage?.content && !toolMessage.tool_calls) {
+            if (switch_autoanswer) {
+              await client.startTyping(from);
 
-            await client.sendText(from, toolMessage.content);
-          } else {
-            thread.next_message_sugested = toolMessage.content;
-            await thread.save();
+              await client.sendText(from, toolMessage.content);
+            } else {
+              thread.next_message_sugested = toolMessage.content;
+              await thread.save();
+            }
           }
-        }
 
-        if (toolMessage?.tool_calls) {
-          await handleToolCalls(
-            toolMessage.tool_calls,
-            thread,
-            from,
-            notifyName,
-            client,
-            message,
-            toolMessage,
-            switch_autoanswer
-          );
+          if (toolMessage?.tool_calls) {
+            await handleToolCalls(
+              toolMessage.tool_calls,
+              thread,
+              from,
+              notifyName,
+              client,
+              message,
+              toolMessage,
+              switch_autoanswer
+            );
+          }
+        } catch (error) {
+          console.error('OpenAI chat error:', error);
         }
-      } catch (error) {
-        console.error('OpenAI chat error:', error);
       }
     }
 
