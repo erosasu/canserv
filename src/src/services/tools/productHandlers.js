@@ -137,7 +137,7 @@ export const productHandlers = {
       let quotation;
       try {
         const response = await axios.get(
-          `http://localhost:3002/autocotizar/${thread.account_id}?productos=${productosParam}&address=${domicilioEncoded}&phone=${contact}&name=${clienteEncoded}&from=${encodedFrom}`
+          `https://api.platvialum.com/autocotizar/${thread.account_id}?productos=${productosParam}&address=${domicilioEncoded}&phone=${contact}&name=${clienteEncoded}&from=${encodedFrom}`
         );
         console.log(response.data);
         quotation = response.data;

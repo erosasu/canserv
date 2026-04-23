@@ -12,7 +12,7 @@ import { convert } from '../mapper/index';
 import Admin from '../src/admin.js';
 import Cliente from '../src/chat.js';
 import { generatePrompt } from '../src/prompt.js';
-import { startAutoStatuses } from '../src/services/autoStatus.js';
+
 //import { registrarComprobantePago } from '../src/services/recibosService';
 import { handleToolCalls } from '../src/services/toolService.js';
 import { tools } from '../src/tools';
@@ -414,7 +414,6 @@ export async function startAllSessions(config: any, logger: any) {
 }
 
 export async function startHelper(client: any, req: any) {
-  await startAutoStatuses(client);
   if (req.serverOptions.webhook.allUnreadOnStart) await sendUnread(client, req);
 
   if (req.serverOptions.archive.enable) await archive(client, req);
