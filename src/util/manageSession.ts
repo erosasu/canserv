@@ -21,6 +21,7 @@ import unzipper from 'unzipper';
 
 import { logger } from '..';
 import config from '../config';
+import { disableBrowserAutoRestartForSession } from './browserRestartPolicy';
 import { startAllSessions } from './functions';
 import getAllTokens from './getAllTokens';
 import { clientsArray } from './sessionUtil';
@@ -113,6 +114,14 @@ export async function restoreSessions(
 
 export async function closeAllSessions(req: Request) {
   const names = await getAllTokens(req);
+  const toDisable = new Set<string>([
+    ...names,
+    ...Object.keys(clientsArray as unknown as Record<string, unknown>),
+  ]);
+  for (const s of toDisable) {
+    disableBrowserAutoRestartForSession(s, logger);
+  }
+
   names.forEach(async (session: string) => {
     const client = clientsArray[session];
     try {

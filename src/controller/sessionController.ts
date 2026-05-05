@@ -23,11 +23,18 @@ import { Logger } from 'winston';
 import { version } from '../../package.json';
 import config from '../config';
 import CreateSessionUtil from '../util/createSessionUtil';
+import { disableBrowserAutoRestartForSession } from '../util/browserRestartPolicy';
 import { callWebHook, contactToArray } from '../util/functions';
 import getAllTokens from '../util/getAllTokens';
 import { clientsArray, deleteSessionOnArray } from '../util/sessionUtil';
 
-const SessionUtil = new CreateSessionUtil();
+let sessionUtilSingleton: CreateSessionUtil | undefined;
+function getSessionUtilSingleton(): CreateSessionUtil {
+  if (!sessionUtilSingleton) {
+    sessionUtilSingleton = new CreateSessionUtil();
+  }
+  return sessionUtilSingleton;
+}
 
 async function downloadFileFunction(
   message: Message,
@@ -219,7 +226,11 @@ export async function startSession(req: Request, res: Response) {
   const { waitQrCode = false } = req.body;
 
   await getSessionState(req, res);
-  await SessionUtil.opendata(req, session, waitQrCode ? res : null);
+  await getSessionUtilSingleton().opendata(
+    req,
+    session,
+    waitQrCode ? res : null
+  );
 }
 
 export async function closeSession(req: Request, res: Response) {
@@ -236,6 +247,7 @@ export async function closeSession(req: Request, res: Response) {
    */
   const session = req.session;
   try {
+    disableBrowserAutoRestartForSession(session, req.logger);
     if ((clientsArray as any)[session].status === null) {
       return await res
         .status(200)
@@ -277,6 +289,7 @@ export async function logOutSession(req: Request, res: Response) {
    */
   try {
     const session = req.session;
+    disableBrowserAutoRestartForSession(session, req.logger);
     await req.client.logout();
     deleteSessionOnArray(req.session);
 

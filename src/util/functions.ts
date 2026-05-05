@@ -235,41 +235,14 @@ export async function autoDownload(
     // Filtros iniciales
     if (/broadcast|newsletter|@g.us|@broadcast/.test(message.from)) return null;
 
-    const sessionKey = String(
-      (message as { session?: string }).session ?? client?.session ?? ''
-    ).trim();
-    let admin: { celular?: string } | null = null;
-    try {
-      if (looksLikeMongoObjectId(sessionKey)) {
-        admin = await Admin.findOne({
-          _id: new mongoose.Types.ObjectId(sessionKey),
-        });
-      }
-      if (!admin && sessionKey) {
-        admin = await Admin.findOne({ session: sessionKey });
-      }
-    } catch {
-      admin = null;
-    }
-    const SYSTEM_NUMBER = '521' + admin?.celular + '@c.us';
+    let admin: any = null;
 
-    // Comandos de control (Prender/Apagar)
-    if (message.to === SYSTEM_NUMBER && message.from === SYSTEM_NUMBER) {
-      if (message.body === 'Prender') {
-        switch_autoanswer = true;
-        return null;
-      }
-      if (message.body === 'Apagar') {
-        switch_autoanswer = false;
-        return null;
-      }
-    }
+    admin = await Admin.findOne({ session: client.session });
 
+    const account_id = admin?._id || 'gabriel';
+    console.log(account_id);
     const from = message.from;
-    const account_id = client.session;
-    const isSystem =
-      client.session === 'gabriel' ||
-      client.session === '6490fc33b844a5d0f55ab865';
+    const isSystem = client.session == message.from;
 
     const searchField = isSystem ? message.to : message.from;
     let phone = '';

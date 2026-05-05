@@ -24,8 +24,13 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { promisify } from 'util';
 
-import { download } from '../controller/sessionController';
 import { WhatsAppServer } from '../types/WhatsAppServer';
+import {
+  clearBrowserAutoRestartDisabledForSession,
+  disableBrowserAutoRestartForSession,
+  restartOnWaDisconnectedStates,
+  shouldAllowBrowserAutoRestart,
+} from './browserRestartPolicy';
 import chatWootClient from './chatWootClient';
 import { autoDownload, callWebHook, startHelper } from './functions';
 import { clientsArray, eventEmitter } from './sessionUtil';
@@ -288,6 +293,9 @@ export default class CreateSessionUtil {
     res?: any
   ) {
     try {
+      // Nueva apertura vía API: volver a permitir reinicios de Chromium hasta el próximo cierre explícito.
+      clearBrowserAutoRestartDisabledForSession(session);
+
       let client = this.getClient(session) as any;
       if (
         client.status != null &&
@@ -440,6 +448,10 @@ export default class CreateSessionUtil {
                   statusFind === 'autocloseCalled' ||
                   statusFind === 'desconnectedMobile'
                 ) {
+                  disableBrowserAutoRestartForSession(
+                    client.session,
+                    req.logger
+                  );
                   client.status = 'CLOSED';
                   client.qrcode = null;
                   client.close();
@@ -453,6 +465,12 @@ export default class CreateSessionUtil {
               } catch (error) {}
             },
             onBrowserClose: () => {
+              if (!shouldAllowBrowserAutoRestart(session)) {
+                req.logger.info(
+                  `[${session}] Browser cerrado; no se reinicia (sesión cerrada o WPP_BROWSER_AUTO_RESTART=0).`
+                );
+                return;
+              }
               req.logger.warn(
                 `[${session}] Browser cerrado inesperadamente, reiniciando...`
               );
@@ -589,6 +607,13 @@ export default class CreateSessionUtil {
 
         // Para errores de timeout, usar un delay más largo para dar tiempo a que se cierren procesos
         const restartDelay = isTimeoutError ? 10000 : 5000;
+        if (!shouldAllowBrowserAutoRestart(session)) {
+          req.logger.warn(
+            `[${session}] Error de navegador no dispara reinicio (sesión cerrada o WPP_BROWSER_AUTO_RESTART=0).`
+          );
+          clientsArray[session] = undefined;
+          return;
+        }
         this.handleBrowserRestart(req, session, client, restartDelay);
       } else {
         // Para otros errores, loguear pero no reiniciar automáticamente
@@ -606,6 +631,30 @@ export default class CreateSessionUtil {
     client: any,
     delay: number = 3000
   ) {
+    if (!shouldAllowBrowserAutoRestart(session)) {
+      req.logger.warn(
+        `[${session}] Reinicio automático omitido (sesión cerrada con API/mobile o WPP_BROWSER_AUTO_RESTART=0). Liberando proceso de navegador si aplica…`
+      );
+      try {
+        const userDataDir = req.serverOptions.customUserDataDir
+          ? req.serverOptions.customUserDataDir + session
+          : null;
+        if (userDataDir) {
+          await this.killChromeProcessesForUserDataDir(
+            userDataDir,
+            req.logger,
+            session
+          );
+        }
+      } catch {
+        /* noop */
+      }
+      client._restarting = false;
+      client._restartAttempts = 0;
+      clientsArray[session] = undefined;
+      return;
+    }
+
     // Evitar múltiples reinicios simultáneos
     if (client._restarting) {
       req.logger.info(`[${session}] Reinicio ya en progreso, ignorando...`);
@@ -620,7 +669,8 @@ export default class CreateSessionUtil {
       req.logger.error(
         `[${session}] Máximo de intentos de reinicio alcanzado. Deteniendo reintentos.`
       );
-      client._restarting = false;
+      disableBrowserAutoRestartForSession(session, req.logger);
+      clientsArray[session] = undefined;
       return;
     }
 
@@ -634,7 +684,15 @@ export default class CreateSessionUtil {
       `[${session}] Programando reinicio del navegador en ${backoffDelay}ms (intento ${client._restartAttempts}/10)...`
     );
 
-    setTimeout(() => {
+    if (client._browserRestartTimer) {
+      clearTimeout(
+        client._browserRestartTimer as ReturnType<typeof setTimeout>
+      );
+      client._browserRestartTimer = undefined;
+    }
+
+    client._browserRestartTimer = setTimeout(() => {
+      client._browserRestartTimer = undefined;
       void this.runWithSessionQueue(session, async () => {
         try {
           req.logger.info(`[${session}] Cerrando navegador anterior...`);
@@ -720,7 +778,7 @@ export default class CreateSessionUtil {
           client._restarting = false;
         }
       });
-    }, backoffDelay);
+    }, backoffDelay) as unknown as ReturnType<typeof setTimeout>;
   }
 
   async opendata(req: Request, session: string, res?: any) {
@@ -845,6 +903,12 @@ export default class CreateSessionUtil {
       // Los estados posibles incluyen: OPENING, PAIRING, UNPAIRED, UNPAIRED_IDLE, CONNECTED, TIMEOUT, CONFLICT, UNLAUNCHED, PROXYBLOCK, TARGET_BLOCK, OPEN_FAILURE, DISCONNECTED
       const disconnectedStates = ['DISCONNECTED', 'TIMEOUT', 'OPEN_FAILURE'];
       if (disconnectedStates.includes(state)) {
+        if (!restartOnWaDisconnectedStates()) {
+          req.logger.info(
+            `[${client.session}] Estado ${state}: reinicio Chromium omitido (por defecto; export WPP_BROWSER_RESTART_ON_WA_STATES=true si quieres el comportamiento anterior).`
+          );
+          return;
+        }
         req.logger.warn(
           `[${client.session}] Estado ${state} detectado, programando reinicio...`
         );
@@ -857,6 +921,7 @@ export default class CreateSessionUtil {
       if (client.page) {
         // Listener para errores de la página
         client.page.on('error', (error: any) => {
+          if (!shouldAllowBrowserAutoRestart(client.session)) return;
           const errorMessage = error?.message || String(error);
           if (
             errorMessage.includes('timeout') ||
@@ -871,6 +936,7 @@ export default class CreateSessionUtil {
 
         // Listener para cuando la página se cierra
         client.page.on('close', () => {
+          if (!shouldAllowBrowserAutoRestart(client.session)) return;
           req.logger.warn(
             `[${client.session}] Página cerrada inesperadamente, reiniciando...`
           );
@@ -890,6 +956,7 @@ export default class CreateSessionUtil {
         const browser = client.page.browser();
         if (browser) {
           browser.on('disconnected', () => {
+            if (!shouldAllowBrowserAutoRestart(client.session)) return;
             req.logger.warn(
               `[${client.session}] Navegador desconectado, reiniciando...`
             );
@@ -916,6 +983,8 @@ export default class CreateSessionUtil {
       message.session = client.session;
 
       if (message.type === 'sticker') {
+        // Import dinámico: evita ciclo createSessionUtil ↔ sessionController al arrancar.
+        const { download } = await import('../controller/sessionController');
         download(message, client, req.logger);
       }
 

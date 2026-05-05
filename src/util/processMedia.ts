@@ -78,7 +78,7 @@ export default async function processMediaContent(
   message: any,
   thread: any,
   req: any,
-  isSystem: boolean
+  fromSessionOwner: boolean
 ): Promise<string | null> {
   const isImage =
     message.type?.startsWith('image') || message.mimetype?.startsWith('image/');
@@ -249,10 +249,14 @@ export default async function processMediaContent(
     }: ${s3Url}\n${mediaDescription || ''}`;
 
     thread.messages.push({
-      role: isSystem ? 'system' : 'user',
-      content: message.caption + '. ' + content.trim(),
+      role: fromSessionOwner ? 'assistant' : 'user',
+      content: (message.caption ? `${message.caption}. ` : '') + content.trim(),
       timeStamps: new Date(),
-      messageId: message.id,
+      messageId:
+        typeof message.id === 'string'
+          ? message.id
+          : message.id?._serialized ??
+            (message.id != null ? String(message.id) : undefined),
     });
 
     await thread.save();
