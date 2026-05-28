@@ -25,12 +25,6 @@ import * as path from 'path';
 import { promisify } from 'util';
 
 import { WhatsAppServer } from '../types/WhatsAppServer';
-import {
-  clearBrowserAutoRestartDisabledForSession,
-  disableBrowserAutoRestartForSession,
-  restartOnWaDisconnectedStates,
-  shouldAllowBrowserAutoRestart,
-} from './browserRestartPolicy';
 import chatWootClient from './chatWootClient';
 import { autoDownload, callWebHook, startHelper } from './functions';
 import { clientsArray, eventEmitter } from './sessionUtil';
@@ -43,9 +37,8 @@ export default class CreateSessionUtil {
   private static killChromeProcessesPromises = new Map<string, Promise<void>>();
 
   /**
-   * Serializa crear/cerrar/reiniciar navegador por sesión para evitar
-   * `SingletonLock: File exists` cuando varios handlers disparan reinicio a la vez.
-   * El reinicio interno llama a {@link createSessionUtilCore} (sin re-encolar) para no bloquearse.
+   * Serializa operaciones de sesión (start/close) para evitar
+   * `SingletonLock: File exists` cuando llegan varias peticiones a la vez.
    */
   private static sessionOpChain = new Map<string, Promise<unknown>>();
 
@@ -275,6 +268,37 @@ export default class CreateSessionUtil {
     return client._chatWootClient;
   }
 
+  /** Cierra la sesión en memoria sin lanzar otro Chromium (evita procesos huérfanos). */
+  private markSessionClosed(
+    req: any,
+    session: string,
+    client: any,
+    reason: string
+  ): void {
+    req.logger.warn(
+      `[${session}] ${reason}. Sesión marcada CLOSED; reinicie manualmente con start-session si hace falta.`
+    );
+    if (client?._browserRestartTimer) {
+      clearTimeout(
+        client._browserRestartTimer as ReturnType<typeof setTimeout>
+      );
+      client._browserRestartTimer = undefined;
+    }
+    if (client) {
+      client._restarting = false;
+      client.status = 'CLOSED';
+      client.qrcode = null;
+      try {
+        if (typeof client.close === 'function') {
+          void client.close().catch(() => undefined);
+        }
+      } catch {
+        /* noop */
+      }
+    }
+    clientsArray[session] = undefined;
+  }
+
   async createSessionUtil(
     req: any,
     clientsArray: any,
@@ -293,19 +317,16 @@ export default class CreateSessionUtil {
     res?: any
   ) {
     try {
-      // Nueva apertura vía API: volver a permitir reinicios de Chromium hasta el próximo cierre explícito.
-      clearBrowserAutoRestartDisabledForSession(session);
-
       let client = this.getClient(session) as any;
       if (
         client.status != null &&
         client.status !== 'CLOSED' &&
         client.status !== 'INITIALIZING'
       ) {
-        // Si está reiniciando, esperar un momento
+        // Si está reiniciando (legado), esperar un momento
         if (client._restarting) {
           req.logger.info(
-            `[${session}] Sesión ya está siendo reiniciada, esperando...`
+            `[${session}] Operación de sesión en curso, ignorando duplicado...`
           );
           return;
         }
@@ -448,10 +469,6 @@ export default class CreateSessionUtil {
                   statusFind === 'autocloseCalled' ||
                   statusFind === 'desconnectedMobile'
                 ) {
-                  disableBrowserAutoRestartForSession(
-                    client.session,
-                    req.logger
-                  );
                   client.status = 'CLOSED';
                   client.qrcode = null;
                   client.close();
@@ -465,16 +482,12 @@ export default class CreateSessionUtil {
               } catch (error) {}
             },
             onBrowserClose: () => {
-              if (!shouldAllowBrowserAutoRestart(session)) {
-                req.logger.info(
-                  `[${session}] Browser cerrado; no se reinicia (sesión cerrada o WPP_BROWSER_AUTO_RESTART=0).`
-                );
-                return;
-              }
-              req.logger.warn(
-                `[${session}] Browser cerrado inesperadamente, reiniciando...`
+              this.markSessionClosed(
+                req,
+                session,
+                client,
+                'Browser cerrado inesperadamente'
               );
-              this.handleBrowserRestart(req, session, client);
             },
           }
         )
@@ -530,42 +543,24 @@ export default class CreateSessionUtil {
         errorMessage.includes('socket hang up') ||
         errorMessage.includes('shared_memory_switch')
       ) {
-        if (isTimeoutError) {
-          req.logger.warn(
-            `[${session}] Error de timeout detectado, aumentando timeout y reiniciando...`
-          );
-        } else if (isAutoClose) {
-          req.logger.warn(
-            `[${session}] Cierre automático por tiempo de espera del QR; sube autoClose en config o usa WPP_AUTO_CLOSE_MS=0. Programando reinicio...`
-          );
-        } else {
-          req.logger.warn(
-            `[${session}] Error de navegador detectado, programando reinicio...`
-          );
-        }
-        req.logger.warn(
-          `[${session}] Error de navegador detectado, programando reinicio...`
-        );
         const client = this.getClient(session) as any;
+        req.logger.warn(
+          `[${session}] Error de navegador al crear sesión: ${errorMessage}`
+        );
 
-        // Si el error es "already running", necesitamos cerrar primero
         if (
           errorMessage.includes('already running') ||
           errorMessage.includes('SingletonLock')
         ) {
           req.logger.warn(
-            `[${session}] Navegador o lock de perfil presente, forzando cierre...`
+            `[${session}] Lock o Chromium previo detectado; limpiando procesos del perfil...`
           );
           try {
-            // Obtener el userDataDir para matar procesos específicos
             const userDataDir = req.serverOptions.customUserDataDir
               ? req.serverOptions.customUserDataDir + session
               : null;
 
             if (userDataDir) {
-              req.logger.info(
-                `[${session}] Matando procesos de Chrome para userDataDir: ${userDataDir}`
-              );
               await this.killChromeProcessesForUserDataDir(
                 userDataDir,
                 req.logger,
@@ -573,11 +568,10 @@ export default class CreateSessionUtil {
               );
             }
 
-            // Intentar cerrar el browser de forma normal
-            if (client && client.page && client.page.browser) {
+            if (client?.page?.browser) {
               try {
                 const browser = client.page.browser();
-                if (browser && browser.isConnected()) {
+                if (browser?.isConnected()) {
                   await browser.close();
                 }
               } catch (browserError) {
@@ -587,7 +581,7 @@ export default class CreateSessionUtil {
                 );
               }
             }
-            if (client && client.close) {
+            if (client?.close) {
               try {
                 await client.close();
               } catch (closeError) {
@@ -597,188 +591,25 @@ export default class CreateSessionUtil {
                 );
               }
             }
-            clientsArray[session] = undefined;
-            // Esperar antes de reiniciar para asegurar que los procesos se hayan cerrado
-            await new Promise((resolve) => setTimeout(resolve, 5000));
           } catch (closeError) {
-            req.logger.warn(`[${session}] Error al forzar cierre:`, closeError);
+            req.logger.warn(
+              `[${session}] Error al limpiar sesión:`,
+              closeError
+            );
           }
         }
 
-        // Para errores de timeout, usar un delay más largo para dar tiempo a que se cierren procesos
-        const restartDelay = isTimeoutError ? 10000 : 5000;
-        if (!shouldAllowBrowserAutoRestart(session)) {
-          req.logger.warn(
-            `[${session}] Error de navegador no dispara reinicio (sesión cerrada o WPP_BROWSER_AUTO_RESTART=0).`
-          );
-          clientsArray[session] = undefined;
-          return;
-        }
-        this.handleBrowserRestart(req, session, client, restartDelay);
+        this.markSessionClosed(
+          req,
+          session,
+          client,
+          'No se relanza Chromium automáticamente tras el fallo'
+        );
       } else {
-        // Para otros errores, loguear pero no reiniciar automáticamente
         req.logger.error(`[${session}] Error no recuperable: ${errorMessage}`);
+        clientsArray[session] = undefined;
       }
     }
-  }
-
-  /**
-   * Maneja el reinicio automático del navegador cuando se cierra inesperadamente
-   */
-  private async handleBrowserRestart(
-    req: any,
-    session: string,
-    client: any,
-    delay: number = 3000
-  ) {
-    if (!shouldAllowBrowserAutoRestart(session)) {
-      req.logger.warn(
-        `[${session}] Reinicio automático omitido (sesión cerrada con API/mobile o WPP_BROWSER_AUTO_RESTART=0). Liberando proceso de navegador si aplica…`
-      );
-      try {
-        const userDataDir = req.serverOptions.customUserDataDir
-          ? req.serverOptions.customUserDataDir + session
-          : null;
-        if (userDataDir) {
-          await this.killChromeProcessesForUserDataDir(
-            userDataDir,
-            req.logger,
-            session
-          );
-        }
-      } catch {
-        /* noop */
-      }
-      client._restarting = false;
-      client._restartAttempts = 0;
-      clientsArray[session] = undefined;
-      return;
-    }
-
-    // Evitar múltiples reinicios simultáneos
-    if (client._restarting) {
-      req.logger.info(`[${session}] Reinicio ya en progreso, ignorando...`);
-      return;
-    }
-
-    client._restarting = true;
-    client._restartAttempts = (client._restartAttempts || 0) + 1;
-
-    // Límite de intentos (máximo 10 intentos)
-    if (client._restartAttempts > 10) {
-      req.logger.error(
-        `[${session}] Máximo de intentos de reinicio alcanzado. Deteniendo reintentos.`
-      );
-      disableBrowserAutoRestartForSession(session, req.logger);
-      clientsArray[session] = undefined;
-      return;
-    }
-
-    // Backoff exponencial: 3s, 6s, 12s, 24s, etc. (máximo 60s)
-    const backoffDelay = Math.min(
-      delay * Math.pow(2, client._restartAttempts - 1),
-      60000
-    );
-
-    req.logger.info(
-      `[${session}] Programando reinicio del navegador en ${backoffDelay}ms (intento ${client._restartAttempts}/10)...`
-    );
-
-    if (client._browserRestartTimer) {
-      clearTimeout(
-        client._browserRestartTimer as ReturnType<typeof setTimeout>
-      );
-      client._browserRestartTimer = undefined;
-    }
-
-    client._browserRestartTimer = setTimeout(() => {
-      client._browserRestartTimer = undefined;
-      void this.runWithSessionQueue(session, async () => {
-        try {
-          req.logger.info(`[${session}] Cerrando navegador anterior...`);
-
-          // Obtener el userDataDir para matar procesos específicos
-          const userDataDir = req.serverOptions.customUserDataDir
-            ? req.serverOptions.customUserDataDir + session
-            : null;
-
-          // Matar procesos de Chrome que puedan estar bloqueando el userDataDir
-          if (userDataDir) {
-            req.logger.info(
-              `[${session}] Matando procesos de Chrome para userDataDir: ${userDataDir}`
-            );
-            await this.killChromeProcessesForUserDataDir(
-              userDataDir,
-              req.logger,
-              session
-            );
-          }
-
-          // Cerrar el cliente de forma más agresiva
-          if (client) {
-            try {
-              // Cerrar el browser de Puppeteer si existe
-              if (client.page && client.page.browser) {
-                const browser = client.page.browser();
-                if (browser && browser.isConnected()) {
-                  await browser.close();
-                  req.logger.info(`[${session}] Browser de Puppeteer cerrado`);
-                }
-              }
-            } catch (e) {
-              req.logger.warn(
-                `[${session}] Error al cerrar browser de Puppeteer:`,
-                e
-              );
-            }
-
-            try {
-              // Cerrar el cliente de wppconnect
-              if (client.close) {
-                await client.close();
-                req.logger.info(`[${session}] Cliente wppconnect cerrado`);
-              }
-            } catch (e) {
-              req.logger.warn(
-                `[${session}] Error al cerrar cliente wppconnect:`,
-                e
-              );
-            }
-          }
-
-          // Limpiar del array
-          clientsArray[session] = undefined;
-
-          // Esperar más tiempo para asegurar que el proceso se haya cerrado completamente
-          req.logger.info(
-            `[${session}] Esperando 5 segundos para asegurar cierre completo...`
-          );
-          await new Promise((resolve) => setTimeout(resolve, 5000));
-
-          req.logger.info(`[${session}] Reiniciando navegador...`);
-
-          // Reiniciar la sesión (sin re-encolar: ya estamos dentro de runWithSessionQueue)
-          await this.createSessionUtilCore(req, clientsArray, session);
-
-          // Resetear contador de intentos si el reinicio fue exitoso
-          if (
-            clientsArray[session] &&
-            clientsArray[session].status === 'CONNECTED'
-          ) {
-            client._restartAttempts = 0;
-            req.logger.info(`[${session}] Navegador reiniciado exitosamente`);
-          }
-        } catch (error) {
-          req.logger.error(`[${session}] Error al reiniciar navegador:`, error);
-          // Si falla, intentar de nuevo con más delay
-          if (client._restartAttempts < 10) {
-            this.handleBrowserRestart(req, session, client, backoffDelay);
-          }
-        } finally {
-          client._restarting = false;
-        }
-      });
-    }, backoffDelay) as unknown as ReturnType<typeof setTimeout>;
   }
 
   async opendata(req: Request, session: string, res?: any) {
@@ -899,74 +730,19 @@ export default class CreateSessionUtil {
         client.useHere();
       }
 
-      // Detectar cuando el estado indica que el navegador se cerró
-      // Los estados posibles incluyen: OPENING, PAIRING, UNPAIRED, UNPAIRED_IDLE, CONNECTED, TIMEOUT, CONFLICT, UNLAUNCHED, PROXYBLOCK, TARGET_BLOCK, OPEN_FAILURE, DISCONNECTED
       const disconnectedStates = ['DISCONNECTED', 'TIMEOUT', 'OPEN_FAILURE'];
       if (disconnectedStates.includes(state)) {
-        if (!restartOnWaDisconnectedStates()) {
-          req.logger.info(
-            `[${client.session}] Estado ${state}: reinicio Chromium omitido (por defecto; export WPP_BROWSER_RESTART_ON_WA_STATES=true si quieres el comportamiento anterior).`
-          );
-          return;
-        }
         req.logger.warn(
-          `[${client.session}] Estado ${state} detectado, programando reinicio...`
+          `[${client.session}] Estado ${state}; sesión cerrada sin relanzar Chromium.`
         );
-        this.handleBrowserRestart(req, client.session, client);
+        this.markSessionClosed(
+          req,
+          client.session,
+          client,
+          `Estado WhatsApp: ${state}`
+        );
       }
     });
-
-    // Agregar listener para errores no capturados del cliente
-    try {
-      if (client.page) {
-        // Listener para errores de la página
-        client.page.on('error', (error: any) => {
-          if (!shouldAllowBrowserAutoRestart(client.session)) return;
-          const errorMessage = error?.message || String(error);
-          if (
-            errorMessage.includes('timeout') ||
-            errorMessage.includes('ProtocolError')
-          ) {
-            req.logger.warn(
-              `[${client.session}] Error de timeout en página detectado: ${errorMessage}`
-            );
-            this.handleBrowserRestart(req, client.session, client, 10000);
-          }
-        });
-
-        // Listener para cuando la página se cierra
-        client.page.on('close', () => {
-          if (!shouldAllowBrowserAutoRestart(client.session)) return;
-          req.logger.warn(
-            `[${client.session}] Página cerrada inesperadamente, reiniciando...`
-          );
-          this.handleBrowserRestart(req, client.session, client);
-        });
-      }
-    } catch (error) {
-      // Ignorar si no se puede acceder a la página
-      req.logger.debug(
-        `[${client.session}] No se pudo agregar listeners de página: ${error}`
-      );
-    }
-
-    // Agregar listener para errores del navegador
-    try {
-      if (client.page && client.page.browser) {
-        const browser = client.page.browser();
-        if (browser) {
-          browser.on('disconnected', () => {
-            if (!shouldAllowBrowserAutoRestart(client.session)) return;
-            req.logger.warn(
-              `[${client.session}] Navegador desconectado, reiniciando...`
-            );
-            this.handleBrowserRestart(req, client.session, client);
-          });
-        }
-      }
-    } catch (error) {
-      // Ignorar si no se puede acceder al browser
-    }
   }
 
   async listenMessages(client: WhatsAppServer, req: Request) {

@@ -23,7 +23,6 @@ import { Logger } from 'winston';
 import { version } from '../../package.json';
 import config from '../config';
 import CreateSessionUtil from '../util/createSessionUtil';
-import { disableBrowserAutoRestartForSession } from '../util/browserRestartPolicy';
 import { callWebHook, contactToArray } from '../util/functions';
 import getAllTokens from '../util/getAllTokens';
 import { clientsArray, deleteSessionOnArray } from '../util/sessionUtil';
@@ -247,7 +246,6 @@ export async function closeSession(req: Request, res: Response) {
    */
   const session = req.session;
   try {
-    disableBrowserAutoRestartForSession(session, req.logger);
     if ((clientsArray as any)[session].status === null) {
       return await res
         .status(200)
@@ -289,7 +287,6 @@ export async function logOutSession(req: Request, res: Response) {
    */
   try {
     const session = req.session;
-    disableBrowserAutoRestartForSession(session, req.logger);
     await req.client.logout();
     deleteSessionOnArray(req.session);
 
