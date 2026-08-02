@@ -2,7 +2,6 @@ import api from 'axios';
 import dotenv from 'dotenv';
 import { Request } from 'express';
 import fs from 'fs';
-import mongoose from 'mongoose';
 import os from 'os';
 import path from 'path';
 import { promisify } from 'util';
@@ -11,7 +10,6 @@ import { convert } from '../mapper/index';
 import Admin from '../src/admin.js';
 import Cliente from '../src/chat.js';
 import { ServerOptions } from '../types/ServerOptions';
-
 //import { registrarComprobantePago } from '../src/services/recibosService';
 import processMediaContent from './processMedia';
 
@@ -168,7 +166,7 @@ export async function resolveChatIdentity(
   );
 
   // Hilo del cliente: si lo envío yo, el chat es `to`; si me escriben, es `from`.
-  let from = isSystem
+  const from = isSystem
     ? toRaw || chatIdRaw || fromRaw
     : fromRaw || chatIdRaw || toRaw;
 
