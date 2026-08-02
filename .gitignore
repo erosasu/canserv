@@ -23,3 +23,7 @@ userDataDir
 backupFolder
 tokens/*
 wppconnect_tokens/*
+scripts/.token-cache-*.json
+scripts/debug-qr.png
+mem-debug.log
+heap-*.heapsnapshot

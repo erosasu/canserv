@@ -246,26 +246,47 @@ export async function closeSession(req: Request, res: Response) {
    */
   const session = req.session;
   try {
-    if ((clientsArray as any)[session].status === null) {
-      return await res
-        .status(200)
-        .json({ status: true, message: 'Session successfully closed' });
-    } else {
-      (clientsArray as any)[session] = { status: null };
-
-      await req.client.close();
-      req.io.emit('whatsapp-status', false);
-      callWebHook(req.client, req, 'closesession', {
-        message: `Session: ${session} disconnected`,
-        connected: false,
-      });
-
+    const current = (clientsArray as any)[session];
+    if (!current || current.status == null) {
+      deleteSessionOnArray(session);
       return await res
         .status(200)
         .json({ status: true, message: 'Session successfully closed' });
     }
+
+    // Cerrar el cliente real ANTES de reemplazar la entrada en memoria.
+    // Antes se hacía clientsArray[session]={status:null} primero y luego
+    // req.client.close(), dejando Chromium huérfano y stubs sin sendText.
+    const liveClient = req.client;
+    try {
+      if (liveClient && typeof (liveClient as any).close === 'function') {
+        await (liveClient as any).close();
+      }
+    } catch (closeErr) {
+      req.logger.warn(
+        `[${session}] close() falló (se limpia memoria igual): ${
+          (closeErr as Error)?.message || closeErr
+        }`
+      );
+    }
+
+    deleteSessionOnArray(session);
+    req.io.emit('whatsapp-status', false);
+    if (liveClient) {
+      callWebHook(liveClient, req, 'closesession', {
+        message: `Session: ${session} disconnected`,
+        connected: false,
+      });
+    }
+
+    return await res
+      .status(200)
+      .json({ status: true, message: 'Session successfully closed' });
   } catch (error) {
     req.logger.error(error);
+    try {
+      deleteSessionOnArray(session);
+    } catch (_) {}
     return await res
       .status(500)
       .json({ status: false, message: 'Error closing session', error });
@@ -345,11 +366,37 @@ export async function checkConnectionSession(req: Request, res: Response) {
      }
    */
   try {
-    await req.client.isConnected();
+    const client: any = req.client;
+    if (!client || typeof client.isConnected !== 'function') {
+      return res.status(200).json({
+        status: false,
+        message: 'Disconnected',
+        reason:
+          client?.status === 'INITIALIZING'
+            ? 'initializing'
+            : client?.status === 'QRCODE'
+            ? 'waiting_qr'
+            : 'client_stub_or_missing',
+        clientStatus: client?.status ?? null,
+        session: req.session,
+      });
+    }
 
-    return res.status(200).json({ status: true, message: 'Connected' });
+    await client.isConnected();
+
+    return res.status(200).json({
+      status: true,
+      message: 'Connected',
+      session: req.session,
+      clientStatus: client.status || null,
+    });
   } catch (error) {
-    return res.status(200).json({ status: false, message: 'Disconnected' });
+    return res.status(200).json({
+      status: false,
+      message: 'Disconnected',
+      session: req.session,
+      error: (error as Error)?.message || String(error),
+    });
   }
 }
 

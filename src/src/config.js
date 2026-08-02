@@ -10,8 +10,9 @@ export const config = {
   },
   api: {
     psiBaseUrl:
-      process.env.PSI_BASE_URL || 'https://api.platvialum.com/psi_no_auth',
-    quoteBaseUrl: 'https://api.platvialum.com' || 'http://localhost:3002',
+      process.env.PSI_BASE_URL ||
+      'https://api.cotizadoraluminio.mx/psi_no_auth',
+    quoteBaseUrl: 'https://api.cotizadoraluminio.mx' || 'http://localhost:3002',
     lambdaUrl:
       process.env.LAMBDA_URL ||
       'https://8oz59l1g26.execute-api.us-east-1.amazonaws.com/default/serverPlatvialum',
@@ -29,7 +30,7 @@ export const config = {
   catalog: {
     url:
       process.env.CATALOG_URL ||
-      'https://platvialum.com/portafolio/6490fc33b844a5d0f55ab865',
+      'https://cotizadoraluminio.mx/portafolio/6490fc33b844a5d0f55ab865',
   },
 };
 

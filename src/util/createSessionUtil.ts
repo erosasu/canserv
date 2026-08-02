@@ -26,7 +26,12 @@ import { promisify } from 'util';
 
 import { WhatsAppServer } from '../types/WhatsAppServer';
 import chatWootClient from './chatWootClient';
-import { autoDownload, callWebHook, startHelper } from './functions';
+import {
+  autoDownload,
+  callWebHook,
+  isStatusOrBroadcastMessage,
+  startHelper,
+} from './functions';
 import { clientsArray, eventEmitter } from './sessionUtil';
 import Factory from './tokenStore/factory';
 
@@ -51,6 +56,11 @@ export default class CreateSessionUtil {
     const next = prev.catch(() => {}).then(fn);
     CreateSessionUtil.sessionOpChain.set(session, next);
     return next as Promise<T>;
+  }
+
+  /** Rompe una cola colgada (p.ej. create() eterno) para permitir un nuevo start-session. */
+  private resetSessionQueue(session: string): void {
+    CreateSessionUtil.sessionOpChain.set(session, Promise.resolve());
   }
 
   /** Límite de líneas de consola por sesión para "Waiting for QRCode Scan" (evita spam en sesiones sin vincular). */
@@ -318,7 +328,15 @@ export default class CreateSessionUtil {
   ) {
     try {
       let client = this.getClient(session) as any;
+
+      const isLive =
+        typeof client.sendText === 'function' &&
+        typeof client.isConnected === 'function';
+      // Stub solo si no es cliente real y no está a mitad de create() (INITIALIZING).
+      const isStub = client && !isLive && client.status !== 'INITIALIZING';
+
       if (
+        !isStub &&
         client.status != null &&
         client.status !== 'CLOSED' &&
         client.status !== 'INITIALIZING'
@@ -330,7 +348,26 @@ export default class CreateSessionUtil {
           );
           return;
         }
+        req.logger.info(
+          `[${session}] Sesión ya en estado ${client.status}; no se reinicia.`
+        );
         return;
+      }
+
+      if (client.status === 'INITIALIZING' && !isLive) {
+        req.logger.info(
+          `[${session}] create() en curso (INITIALIZING); no se lanza otro Chromium.`
+        );
+        return;
+      }
+
+      if (isStub) {
+        req.logger.warn(
+          `[${session}] Cliente stub detectado (sin sendText/isConnected). Recreando sesión.`
+        );
+        this.resetSessionQueue(session);
+        clientsArray[session] = undefined;
+        client = this.getClient(session) as any;
       }
 
       // Verificación preventiva: matar procesos colgados antes de crear sesión
@@ -373,7 +410,7 @@ export default class CreateSessionUtil {
           protocolTimeout: 300000, // 5 minutos (300000ms) - tiempo suficiente para operaciones pesadas
           timeout: 300000, // Timeout general de Puppeteer
           // Opciones adicionales para mejorar estabilidad
-          headless: true,
+          headless: process.env.WPP_HEADLESS === 'false' ? false : true,
           /**
            * Al cerrar SSH o el TTY de la sesión, el SO puede enviar SIGHUP; Puppeteer por defecto
            * cierra Chromium ante SIGHUP (parece "solo funciona mientras veo pm2 logs").
@@ -764,18 +801,26 @@ export default class CreateSessionUtil {
         download(message, client, req.logger);
       }
 
+      const isStatusMsg = isStatusOrBroadcastMessage(message);
+
+      // Persistir todos los mensajes del hilo (entrada y salida), salvo status/broadcast.
+      // callWebHook también llama autoDownload; el dedupe por messageId evita duplicados.
       if (
-        req.serverOptions?.websocket?.autoDownload ||
-        (req.serverOptions?.webhook?.autoDownload &&
-          (message.fromMe == false ||
-            (message.fromMe == true && message.type !== 'chat')))
+        !isStatusMsg &&
+        (req.serverOptions?.websocket?.autoDownload ||
+          req.serverOptions?.webhook?.autoDownload)
       ) {
         await autoDownload(client, req, message);
       }
 
       req.io.emit('received-message', { response: message });
-      if (req.serverOptions.webhook.onSelfMessage && message.fromMe)
+      if (
+        !isStatusMsg &&
+        req.serverOptions.webhook.onSelfMessage &&
+        message.fromMe
+      ) {
         callWebHook(client, req, 'onselfmessage', message);
+      }
     });
 
     await client.onIncomingCall(async (call) => {

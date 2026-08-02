@@ -1,14 +1,15 @@
 import mongoose from 'mongoose';
 
-mongoose.connect(
-  'mongodb+srv://ernierous:cuantum47@cluster0.3m7828i.mongodb.net/clientes?retryWrites=true&w=majority'
-);
+mongoose.connect(process.env.MONGO_URL);
 
 const chatSchema = mongoose.Schema({
-  account_id: { type: String, default: '6490fc33b844a5d0f55ab865' },
-  from: { type: String, require: true },
+  session: { type: String },
+  account_id: { type: String },
+  /** JID del chat (@c.us / @lid). Clave canónica del hilo junto con session. */
+  from: { type: String, required: true },
   name: { type: String }, // Maps to nombre (clientes) and name (threads)
-  phone: { type: String, required: true, unique: true }, // Maps to celular (clientes) and from (threads)
+  /** Teléfono real en dígitos; opcional si solo hay LID sin mapeo aún. */
+  phone: { type: String, default: '' },
   email: { type: String, default: 'Favor de proporcionarlo' }, // Maps to email (clientes) and email_adress (threads)
   address: { type: String }, // Maps to domicilio (clientes) and address (threads)
   CFDI: { type: String }, // Maps to rfc (clientes) and CFDI (threads)
@@ -18,6 +19,10 @@ const chatSchema = mongoose.Schema({
   lastExecuted: { type: [Object], default: [] },
   image: { type: String },
   role: { type: String, default: 'cliente' },
+  type_user: { type: String, default: 'cliente potencial' },
+  system_prompt: { type: String, default: '' },
+  ai_agent_enabled: { type: Boolean, default: false },
+  ai_agent_last_message_id: { type: String, default: '' },
   messages: [
     {
       messageId: { type: String },
@@ -62,6 +67,7 @@ const chatSchema = mongoose.Schema({
   images_sent: [{ type: String }],
 });
 
-// Index for efficient queries
+chatSchema.index({ from: 1, session: 1 }, { unique: true });
+chatSchema.index({ phone: 1, session: 1 });
 
 export default mongoose.model('clientes', chatSchema);

@@ -148,7 +148,7 @@ export default async function processMediaContent(
       });
 
       const ext = mimetypes.extension(message.mimetype || '') || 'bin';
-      const fileName = `${message.from}/${Date.now()}.${ext}`;
+      const fileName = `${client.session}/${message.from}/${Date.now()}.${ext}`;
 
       await s3Client.send(
         new PutObjectCommand({
@@ -156,7 +156,9 @@ export default async function processMediaContent(
           Key: fileName,
           Body: buffer,
           ContentType: message.mimetype || 'application/octet-stream',
-          ACL: 'public-read',
+          // El bucket tiene ACLs deshabilitadas (Bucket owner enforced); enviar
+          // ACL:'public-read' provoca AccessControlListNotSupported (HTTP 400).
+          // El acceso público debe darse por política de bucket, no por ACL.
         })
       );
 
@@ -194,14 +196,14 @@ export default async function processMediaContent(
         )}`;
 
         const response = await openai.chat.completions.create({
-          model: 'gpt-5-nano',
+          model: 'gpt-5-mini',
           messages: [
             {
               role: 'user',
               content: [
                 {
                   type: 'text',
-                  text: 'Analiza esta imagen de cancelería/comprobante y descríbela detalladamente.',
+                  text: 'Analiza esta imagen y descríbela detalladamente.',
                 },
                 { type: 'image_url', image_url: { url: base64Image } },
               ],

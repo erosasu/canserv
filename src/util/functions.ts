@@ -3,7 +3,6 @@ import dotenv from 'dotenv';
 import { Request } from 'express';
 import fs from 'fs';
 import mongoose from 'mongoose';
-import OpenAI from 'openai';
 import os from 'os';
 import path from 'path';
 import { promisify } from 'util';
@@ -11,16 +10,22 @@ import { promisify } from 'util';
 import { convert } from '../mapper/index';
 import Admin from '../src/admin.js';
 import Cliente from '../src/chat.js';
-import { generatePrompt } from '../src/prompt.js';
+import { ServerOptions } from '../types/ServerOptions';
 
 //import { registrarComprobantePago } from '../src/services/recibosService';
-import { handleToolCalls } from '../src/services/toolService.js';
-import { tools } from '../src/tools';
-import { ServerOptions } from '../types/ServerOptions';
 import processMediaContent from './processMedia';
 
 dotenv.config();
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+export type ChatIdentity = {
+  session: string;
+  /** JID canónico del hilo (@c.us / @lid) para ordenar chats. */
+  from: string;
+  /** Teléfono real en dígitos (vacío si solo hay LID sin mapeo). */
+  phone: string;
+  isSystem: boolean;
+  isGroup: boolean;
+};
 
 export function contactToArray(
   number: any,
@@ -88,6 +93,118 @@ export function groupNameToArray(group: any) {
   return localArr;
 }
 
+/** Status / stories: from suele ser el propio número y to = status@broadcast. */
+export function isStatusOrBroadcastMessage(message: any): boolean {
+  if (!message) return false;
+  const candidates = [
+    message.from,
+    message.to,
+    message.chatId,
+    message.chatId?._serialized,
+    message.id?.remote,
+    message.id?.participant,
+  ]
+    .filter(Boolean)
+    .map(String);
+
+  return candidates.some(
+    (v) =>
+      v === 'status@broadcast' ||
+      v.includes('status@broadcast') ||
+      /@broadcast$/i.test(v) ||
+      /@newsletter$/i.test(v)
+  );
+}
+
+function jidToString(value: unknown): string {
+  if (value == null) return '';
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'object') {
+    const obj = value as { _serialized?: unknown; user?: unknown };
+    if (typeof obj._serialized === 'string') return obj._serialized.trim();
+    if (typeof obj.user === 'string' && obj.user.trim()) {
+      return obj.user.trim();
+    }
+  }
+  return '';
+}
+
+/** Teléfono usable (10–15 dígitos). No usa el id numérico de un @lid. */
+function normalizePhoneDigits(raw: unknown): string {
+  if (raw == null || raw === '') return '';
+  const digits = String(raw).replace(/\D/g, '');
+  if (digits.length >= 10 && digits.length <= 15) return digits;
+  return '';
+}
+
+function phoneFromJid(jid: string): string {
+  if (!jid || jid.includes('@lid') || jid.includes('@g.us')) return '';
+  if (!jid.includes('@c.us') && !jid.includes('@s.whatsapp.net')) return '';
+  return normalizePhoneDigits(jid.split('@')[0]);
+}
+
+/**
+ * Identidad del hilo para BD/webhook:
+ * - `from`: JID del chat (@c.us / @lid)
+ * - `phone`: número real (resuelve LID con getPnLidEntry cuando hace falta)
+ */
+export async function resolveChatIdentity(
+  client: any,
+  message: any
+): Promise<ChatIdentity | null> {
+  if (!message || isStatusOrBroadcastMessage(message)) return null;
+
+  const session = String(client?.session || message.session || '').trim();
+  if (!session) return null;
+
+  const fromRaw = jidToString(message.from);
+  const toRaw = jidToString(message.to);
+  const chatIdRaw = jidToString(
+    message.chatId?._serialized || message.chatId || message.key?.remoteJid
+  );
+
+  const isSystem = Boolean(
+    message.fromMe || (fromRaw && session && fromRaw === session)
+  );
+
+  // Hilo del cliente: si lo envío yo, el chat es `to`; si me escriben, es `from`.
+  let from = isSystem
+    ? toRaw || chatIdRaw || fromRaw
+    : fromRaw || chatIdRaw || toRaw;
+
+  if (!from || /@g\.us$/i.test(from)) {
+    return null;
+  }
+
+  let phone =
+    phoneFromJid(from) ||
+    phoneFromJid(jidToString(message.sender?.id)) ||
+    normalizePhoneDigits(message.sender?.formattedName);
+
+  // LID → número real vía mapeo de WhatsApp Web (from se mantiene como JID/@lid).
+  if (!phone && typeof client?.getPnLidEntry === 'function') {
+    try {
+      const entry = await client.getPnLidEntry(from);
+      const pn = jidToString(entry?.phoneNumber);
+      phone = phoneFromJid(pn) || normalizePhoneDigits(pn.split('@')[0]);
+    } catch {
+      /* sin mapeo aún; se guarda el @lid y phone vacío */
+    }
+  }
+
+  if (!phone && from.includes('@c.us')) {
+    phone = phoneFromJid(from);
+  }
+
+  return {
+    session,
+    from,
+    phone,
+    isSystem,
+    isGroup: /@g\.us$/i.test(from),
+  };
+}
+
 export async function callWebHook(
   client: any,
   req: Request,
@@ -95,40 +212,85 @@ export async function callWebHook(
   data: any
 ) {
   const webhook =
-    client?.config.webhook || req.serverOptions.webhook.url || false;
-  if (webhook) {
-    if (
-      req.serverOptions.webhook?.ignore &&
-      (req.serverOptions.webhook.ignore.includes(event) ||
-        req.serverOptions.webhook.ignore.includes(data?.from) ||
-        req.serverOptions.webhook.ignore.includes(data?.type))
-    )
-      return;
-    if (req.serverOptions.webhook.autoDownload)
-      await autoDownload(client, req, data);
-    try {
-      const chatId =
-        data.from ||
-        data.chatId ||
-        (data.chatId ? data.chatId._serialized : null);
-      data = Object.assign({ event: event, session: client.session }, data);
-      if (req.serverOptions.mapper.enable)
-        data = await convert(req.serverOptions.mapper.prefix, data);
-      api
-        .post(webhook, data)
-        .then(() => {
-          try {
-            const events = ['unreadmessages', 'onmessage'];
-            if (events.includes(event) && req.serverOptions.webhook.readMessage)
-              client.sendSeen(chatId);
-          } catch (e) {}
-        })
-        .catch((e) => {
-          req.logger.warn('Error calling Webhook.', e);
-        });
-    } catch (e) {
-      req.logger.error(e);
+    client?.config?.webhook || req.serverOptions.webhook.url || false;
+  if (!webhook) return;
+
+  if (isStatusOrBroadcastMessage(data)) return;
+
+  if (
+    req.serverOptions.webhook?.ignore &&
+    (req.serverOptions.webhook.ignore.includes(event) ||
+      req.serverOptions.webhook.ignore.includes(data?.from) ||
+      req.serverOptions.webhook.ignore.includes(data?.to) ||
+      req.serverOptions.webhook.ignore.includes(data?.type))
+  ) {
+    return;
+  }
+
+  const messageEvents = ['unreadmessages', 'onmessage', 'onselfmessage'];
+  let identity: ChatIdentity | null =
+    (data?._chatIdentity as ChatIdentity) || null;
+
+  // Persistir hilo antes del POST para que API_LosCuates encuentre session+from.
+  // Si onAnyMessage ya corrió autoDownload, reutiliza _chatIdentity (sin duplicar).
+  if (req.serverOptions.webhook.autoDownload && messageEvents.includes(event)) {
+    identity = (await autoDownload(client, req, data)) || identity;
+  } else if (!identity) {
+    identity = await resolveChatIdentity(client, data);
+  }
+
+  try {
+    const chatId =
+      identity?.from ||
+      data.from ||
+      data.chatId ||
+      (data.chatId ? data.chatId._serialized : null);
+
+    const originalWhatsAppFields = {
+      from: data.from,
+      to: data.to,
+      body: data.body,
+      fromMe: data.fromMe,
+      sender: data.sender,
+      chatId: data.chatId,
+      key: data.key,
+      id: data.id,
+      type: data.type,
+      t: data.t,
+      notifyName: data.notifyName,
+      pushName: data.pushName,
+    };
+
+    data = Object.assign({ event, session: client.session }, data);
+    if (req.serverOptions.mapper.enable) {
+      data = await convert(req.serverOptions.mapper.prefix, data);
     }
+
+    // Mapper tagone-* pisa `phone` con el user del JID (rompe @lid).
+    // Dejamos from/phone canónicos para el registro en clientes.
+    Object.assign(data, originalWhatsAppFields, {
+      session: identity?.session || client.session,
+      from: identity?.from || originalWhatsAppFields.from,
+      phone: identity?.phone || '',
+      chatFrom: identity?.from || originalWhatsAppFields.from,
+    });
+    delete data._chatIdentity;
+
+    api
+      .post(webhook, data)
+      .then(() => {
+        try {
+          const events = ['unreadmessages', 'onmessage'];
+          if (events.includes(event) && req.serverOptions.webhook.readMessage) {
+            client.sendSeen(chatId);
+          }
+        } catch (e) {}
+      })
+      .catch((e) => {
+        req.logger.warn('Error calling Webhook.', e);
+      });
+  } catch (e) {
+    req.logger.error(e);
   }
 }
 
@@ -196,20 +358,15 @@ async function resolveDisplayName(
   return name;
 }
 
-/** URL o base64 de la miniatura de perfil que envía WPPConnect en el mensaje. */
-/** 24 hex (ObjectId); evita tratar "gabriel" u otros nombres de sesión como _id. */
-function looksLikeMongoObjectId(value: unknown): value is string {
-  return typeof value === 'string' && /^[a-fA-F0-9]{24}$/.test(value);
-}
-
 function getProfileImageFromMessage(message: any): string | undefined {
   if (!message || typeof message !== 'object') return undefined;
   const thumb =
     message.profilePicThumbObj ??
     message.profilePicThumObj ??
+    message.sender?.profilePicThumbObj ??
     message._data?.profilePicThumbObj ??
     message._data?.profilePicThumObj;
-  const img = thumb?.img;
+  const img = thumb?.img || thumb?.eurl;
   if (typeof img === 'string') {
     const t = img.trim();
     if (t) return t;
@@ -217,76 +374,117 @@ function getProfileImageFromMessage(message: any): string | undefined {
   return undefined;
 }
 
+function messageIdKey(message: any): string {
+  const id = message?.id;
+  if (typeof id === 'string') return id;
+  if (id && typeof id === 'object') {
+    return String(id._serialized || id.id || '');
+  }
+  return '';
+}
+
+function alreadyStored(thread: any, messageId: string): boolean {
+  if (!messageId || !Array.isArray(thread?.messages)) return false;
+  return thread.messages.some((m: any) => m?.messageId === messageId);
+}
+
+/** Evita carrera onMessage + onAnyMessage persistiendo el mismo mensaje dos veces. */
+const autoDownloadInflight = new Map<string, Promise<ChatIdentity | null>>();
+
 /**
- * Downloads and uploads WhatsApp media to S3, generates an image description, and stores it in the thread.
- * Skips broadcast and group messages.
- * @param {any} client - WhatsApp client
- * @param {any} req - Request object with server options
- * @param {any} message - WhatsApp message object
- * @returns {Promise<string|null>} - Returns the S3 URL if uploaded, null otherwise
+ * Persiste el hilo en Mongo (clientes) por session + from, con phone real.
+ * También procesa media. Devuelve la identidad para el webhook.
  */
-let switch_autoanswer = false;
 export async function autoDownload(
   client: any,
   req: any,
   message: any
-): Promise<string | null> {
+): Promise<ChatIdentity | null> {
+  if (!message || isStatusOrBroadcastMessage(message)) return null;
+  if (message._chatIdentity?.from) {
+    return message._chatIdentity as ChatIdentity;
+  }
+
+  const inflightKey = `${client?.session || message.session || ''}:${
+    messageIdKey(message) ||
+    `${message.from}|${message.to}|${message.t}|${message.body || ''}`
+  }`;
+
+  const existing = autoDownloadInflight.get(inflightKey);
+  if (existing) return existing;
+
+  const work = autoDownloadImpl(client, req, message).finally(() => {
+    autoDownloadInflight.delete(inflightKey);
+  });
+  autoDownloadInflight.set(inflightKey, work);
+  return work;
+}
+
+async function autoDownloadImpl(
+  client: any,
+  req: any,
+  message: any
+): Promise<ChatIdentity | null> {
   try {
-    // Filtros iniciales
-    if (/broadcast|newsletter|@g.us|@broadcast/.test(message.from)) return null;
+    const identity = await resolveChatIdentity(client, message);
+    if (!identity || identity.isGroup) return null;
 
-    let admin: any = null;
+    message._chatIdentity = identity;
+    message.session = identity.session;
 
-    admin = await Admin.findOne({ session: client.session });
+    const { session, from, phone, isSystem } = identity;
 
-    const account_id = admin?._id || 'gabriel';
-    console.log(account_id);
-    const from = message.from;
-    const isSystem = client.session == message.from;
-
-    const searchField = isSystem ? message.to : message.from;
-    let phone = '';
-    if (message.sender?.formattedName) {
-      phone = String(message.sender.formattedName).replace(/^\+|\s+/g, '');
-    } else {
-      phone = String(searchField).split('@')[0]?.replace(/[^\d]/g, '') || '';
-    }
+    const admin = await Admin.findOne({ session }).select('_id session').lean();
+    const accountId = admin?._id ? String(admin._id) : undefined;
 
     const displayName = await resolveDisplayName(
       client,
       message,
-      searchField,
+      from,
       isSystem
     );
-    const notifyName =
-      displayName ||
-      getDisplayNameFromMessage(message) ||
-      message.sender?.name ||
-      '';
+    const profileImage = getProfileImageFromMessage(message);
+    const msgId = messageIdKey(message);
 
-    // `name` solo en $set: si también va en $setOnInsert, MongoDB lanza ConflictingUpdateOperators.
     const setDoc: Record<string, unknown> = { updatedAt: new Date() };
     if (displayName && !isSystem) setDoc.name = displayName;
-
-    const profileImage = getProfileImageFromMessage(message);
     if (profileImage) setDoc.image = profileImage;
+    if (phone) setDoc.phone = phone;
+    if (accountId) setDoc.account_id = accountId;
 
-    // 1. Obtener o crear Cliente (Hilo)
-    const thread = await Cliente.findOneAndUpdate(
-      { from: searchField, account_id },
-      {
-        $setOnInsert: {
-          phone,
-          from: searchField,
-          messages: [],
-          createdAt: new Date(),
+    // Buscar por from+session; si el hilo existía solo por phone (migración LID), reutilizarlo.
+    let thread = await Cliente.findOne({ from, session });
+    if (!thread && phone) {
+      thread = await Cliente.findOne({ phone, session });
+      if (thread && thread.from !== from) {
+        thread.from = from;
+      }
+    }
+
+    if (!thread) {
+      thread = await Cliente.findOneAndUpdate(
+        { from, session },
+        {
+          $setOnInsert: {
+            session,
+            from,
+            phone: phone || '',
+            messages: [],
+            createdAt: new Date(),
+            firstMessageTime: new Date(),
+            ...(accountId ? { account_id: accountId, user_id: accountId } : {}),
+          },
+          $set: setDoc,
         },
-        $set: setDoc,
-      },
-      { new: true, upsert: true }
-    );
+        { new: true, upsert: true }
+      );
+    } else {
+      Object.assign(thread, setDoc);
+      if (phone && !thread.phone) thread.phone = phone;
+      if (accountId && !thread.account_id) thread.account_id = accountId;
+      await thread.save();
+    }
 
-    // 2. Inicializar Prompt si es nuevo
     if (!thread.messages || thread.messages.length === 0) {
       thread.messages = [
         {
@@ -295,85 +493,46 @@ export async function autoDownload(
           timeStamps: new Date(),
         },
       ];
+      await thread.save();
     }
 
-    // 3. PROCESAMIENTO DE MEDIA (Nueva función)
-    if (message.type != 'chat') {
+    if (msgId && alreadyStored(thread, msgId)) {
+      return identity;
+    }
+
+    // Media (imagen/audio/doc): no grupos
+    if (message.type && message.type !== 'chat') {
       await processMediaContent(client, message, thread, req, isSystem);
+      return identity;
     }
 
-    // 4. Procesamiento de Mensajes de Texto del Sistema
-    if (isSystem && message.body && message.type == 'chat') {
+    const body = typeof message.body === 'string' ? message.body.trim() : '';
+    if (!body) return identity;
+
+    const stamp = new Date().toLocaleString('es-MX', {
+      timeZone: 'America/Mexico_City',
+    });
+
+    if (isSystem) {
       thread.messages.push({
         role: 'system',
-        content: message.body,
+        content: `[${stamp}] ${body}`,
         timeStamps: new Date(),
-        messageId: message.id,
+        messageId: msgId || undefined,
       });
-      await thread.save();
-    }
-
-    // 5. Procesamiento de Mensajes de Usuario + IA
-    if (
-      typeof message.body === 'string' &&
-      message.body.trim() !== '' &&
-      !isSystem &&
-      message.type == 'chat'
-    ) {
+    } else {
       thread.messages.push({
         role: 'user',
-        content: `${message.body.trim()} [Enviado: ${new Date().toLocaleString(
-          'es-MX'
-        )}]`,
+        content: `${body} [Enviado: ${stamp}]`,
         timeStamps: new Date(),
-        messageId: message.id,
+        messageId: msgId || undefined,
       });
-
       if (displayName && !thread.name) thread.name = displayName;
-      await thread.save();
-
-      // Llamada a OpenAI para respuesta
-      if (client.session === '6490fc33b844a5d0f55ab865') {
-        try {
-          const response = await openai.chat.completions.create({
-            model: 'gpt-5-nano',
-            messages: thread.messages,
-            tools,
-            tool_choice: 'auto',
-          });
-
-          const toolMessage = response.choices[0]?.message;
-
-          if (toolMessage?.content && !toolMessage.tool_calls) {
-            if (switch_autoanswer) {
-              await client.startTyping(from);
-
-              await client.sendText(from, toolMessage.content);
-            } else {
-              thread.next_message_sugested = toolMessage.content;
-              await thread.save();
-            }
-          }
-
-          if (toolMessage?.tool_calls) {
-            await handleToolCalls(
-              toolMessage.tool_calls,
-              thread,
-              from,
-              notifyName,
-              client,
-              message,
-              toolMessage,
-              switch_autoanswer
-            );
-          }
-        } catch (error) {
-          console.error('OpenAI chat error:', error);
-        }
-      }
     }
 
-    return null;
+    thread.updatedAt = new Date();
+    await thread.save();
+    return identity;
   } catch (error) {
     console.error('Error in autoDownload:', error);
     return null;

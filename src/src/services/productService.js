@@ -14,7 +14,7 @@ export async function getProductImages(query) {
   console.log(query);
   try {
     const response = await axios.get(
-      `http://localhost:3002/psi_no_auth/?descripcion=${encodeURIComponent(
+      `https://api.cotizadoraluminio.mx/psi_no_auth/?descripcion=${encodeURIComponent(
         query
       )}`
     );

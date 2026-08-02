@@ -29,7 +29,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.675.0",
-    "@wppconnect-team/wppconnect": "^1.8.12",
+    "@wppconnect-team/wppconnect": "^2.2.6",
     "archiver": "^7.0.1",
     "axios": "^1.7.7",
     "bcrypt": "^5.1.1",

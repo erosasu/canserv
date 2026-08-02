@@ -34,6 +34,10 @@ export const tools: ChatCompletionTool[] = [
                   type: 'number',
                   description: 'Alto del producto (en cm)',
                 },
+                fondo: {
+                  type: 'string',
+                  description: 'Fondo del producto (en cm)',
+                },
               },
               required: ['descripcion', 'ancho', 'alto'],
             },

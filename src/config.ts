@@ -6,18 +6,20 @@ export default {
   port: '21465',
   deviceName: 'WppConnect',
   poweredBy: 'WPPConnect-Server',
+  // En Ubuntu/PM2: relanza sesiones al arrancar para mantener el servicio estable.
   startAllSession: true,
   tokenStoreType: 'file',
   maxListeners: 15,
   customUserDataDir: './userDataDir/',
   webhook: {
-    url: null,
+    url: process.env.WEBHOOK_URL || 'https://api.cotizadoraluminio.mx/garabato',
     autoDownload: true,
     uploadS3: true,
-    readMessage: true,
+    readMessage: false,
     allUnreadOnStart: false,
-    listenAcks: true,
-    onPresenceChanged: true,
+    // Menos eventos = menos carga y menos riesgo de OOM con varias sesiones.
+    listenAcks: false,
+    onPresenceChanged: false,
     onParticipantsChanged: true,
     onReactionMessage: true,
     onPollResponse: true,
@@ -40,32 +42,24 @@ export default {
     daysToArchive: 45,
   },
   log: {
-    level: 'silly', // Before open a issue, change level to silly and retry a action
+    level: process.env.LOG_LEVEL || 'error',
     logger: ['console', 'file'],
   },
   createOptions: {
+    /**
+     * Vacío = versión actual de WhatsApp Web (requerido con wppconnect >=2.x).
+     */
+    whatsappVersion: '',
     browserArgs: [
-      '--disable-web-security',
       '--no-sandbox',
-      '--disable-web-security',
-      '--aggressive-cache-discard',
-      '--disable-cache',
-      '--disable-application-cache',
-      '--disable-offline-load-stale-cache',
-      '--disk-cache-size=0',
-      '--disable-background-networking',
-      '--disable-default-apps',
-      '--disable-extensions',
-      '--disable-sync',
-      '--disable-translate',
-      '--hide-scrollbars',
-      '--metrics-recording-only',
-      '--mute-audio',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
       '--no-first-run',
-      '--safebrowsing-disable-auto-update',
+      '--no-default-browser-check',
+      '--disable-extensions',
+      '--mute-audio',
       '--ignore-certificate-errors',
-      '--ignore-ssl-errors',
-      '--ignore-certificate-errors-spki-list',
     ],
     /**
      * Example of configuring the linkPreview generator
@@ -77,9 +71,8 @@ export default {
      */
     linkPreviewApiServers: null,
     /**
-     * Por defecto wppconnect cierra el navegador a los 60s si no escaneas el QR.
-     * 0 = desactivar ese cierre (recomendado si el QR tarda o se usa por API).
-     * Sobrescribe con env WPP_AUTO_CLOSE_MS (ej. 300000 = 5 min).
+     * 0 = no cerrar el browser por timeout de QR.
+     * Sobrescribe con WPP_AUTO_CLOSE_MS (ej. 300000).
      */
     autoClose: (() => {
       const v = process.env.WPP_AUTO_CLOSE_MS;
