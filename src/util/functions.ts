@@ -7,7 +7,6 @@ import path from 'path';
 import { promisify } from 'util';
 
 import { convert } from '../mapper/index';
-import Admin from '../src/admin.js';
 import Cliente from '../src/chat.js';
 import { ServerOptions } from '../types/ServerOptions';
 //import { registrarComprobantePago } from '../src/services/recibosService';
@@ -432,9 +431,6 @@ async function autoDownloadImpl(
 
     const { session, from, phone, isSystem } = identity;
 
-    const admin = await Admin.findOne({ session }).select('_id session').lean();
-    const accountId = admin?._id ? String(admin._id) : undefined;
-
     const displayName = await resolveDisplayName(
       client,
       message,
@@ -444,11 +440,12 @@ async function autoDownloadImpl(
     const profileImage = getProfileImageFromMessage(message);
     const msgId = messageIdKey(message);
 
+    // Solo campos que se actualizan siempre; no repetir paths en $setOnInsert
+    // (Mongo ConflictingUpdateOperators).
     const setDoc: Record<string, unknown> = { updatedAt: new Date() };
     if (displayName && !isSystem) setDoc.name = displayName;
     if (profileImage) setDoc.image = profileImage;
     if (phone) setDoc.phone = phone;
-    if (accountId) setDoc.account_id = accountId;
 
     // Buscar por from+session; si el hilo existía solo por phone (migración LID), reutilizarlo.
     let thread = await Cliente.findOne({ from, session });
@@ -466,11 +463,11 @@ async function autoDownloadImpl(
           $setOnInsert: {
             session,
             from,
-            phone: phone || '',
             messages: [],
             createdAt: new Date(),
             firstMessageTime: new Date(),
-            ...(accountId ? { account_id: accountId, user_id: accountId } : {}),
+            // phone solo aquí si aún no va en $set (evita conflicto).
+            ...(phone ? {} : { phone: '' }),
           },
           $set: setDoc,
         },
@@ -479,7 +476,6 @@ async function autoDownloadImpl(
     } else {
       Object.assign(thread, setDoc);
       if (phone && !thread.phone) thread.phone = phone;
-      if (accountId && !thread.account_id) thread.account_id = accountId;
       await thread.save();
     }
 
