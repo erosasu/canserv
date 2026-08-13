@@ -173,24 +173,29 @@ export async function resolveChatIdentity(
     return null;
   }
 
-  let phone =
-    phoneFromJid(from) ||
-    phoneFromJid(jidToString(message.sender?.id)) ||
-    normalizePhoneDigits(message.sender?.formattedName);
+  // phone SOLO del cliente (mensaje entrante). En fromMe el sender es la sesión
+  // y no debe grabarse el número propio en el hilo.
+  let phone = '';
+  if (!isSystem) {
+    phone =
+      phoneFromJid(from) ||
+      phoneFromJid(jidToString(message.sender?.id)) ||
+      normalizePhoneDigits(message.sender?.formattedName);
 
-  // LID → número real vía mapeo de WhatsApp Web (from se mantiene como JID/@lid).
-  if (!phone && typeof client?.getPnLidEntry === 'function') {
-    try {
-      const entry = await client.getPnLidEntry(from);
-      const pn = jidToString(entry?.phoneNumber);
-      phone = phoneFromJid(pn) || normalizePhoneDigits(pn.split('@')[0]);
-    } catch {
-      /* sin mapeo aún; se guarda el @lid y phone vacío */
+    // LID → número real vía mapeo de WhatsApp Web (from se mantiene como JID/@lid).
+    if (!phone && typeof client?.getPnLidEntry === 'function') {
+      try {
+        const entry = await client.getPnLidEntry(from);
+        const pn = jidToString(entry?.phoneNumber);
+        phone = phoneFromJid(pn) || normalizePhoneDigits(pn.split('@')[0]);
+      } catch {
+        /* sin mapeo aún; se guarda el @lid y phone vacío */
+      }
     }
-  }
 
-  if (!phone && from.includes('@c.us')) {
-    phone = phoneFromJid(from);
+    if (!phone && from.includes('@c.us')) {
+      phone = phoneFromJid(from);
+    }
   }
 
   return {
@@ -442,14 +447,15 @@ async function autoDownloadImpl(
 
     // Solo campos que se actualizan siempre; no repetir paths en $setOnInsert
     // (Mongo ConflictingUpdateOperators).
+    // phone únicamente si fromMe === false (mensaje del cliente).
     const setDoc: Record<string, unknown> = { updatedAt: new Date() };
     if (displayName && !isSystem) setDoc.name = displayName;
-    if (profileImage) setDoc.image = profileImage;
-    if (phone) setDoc.phone = phone;
+    if (profileImage && !isSystem) setDoc.image = profileImage;
+    if (phone && !isSystem) setDoc.phone = phone;
 
     // Buscar por from+session; si el hilo existía solo por phone (migración LID), reutilizarlo.
     let thread = await Cliente.findOne({ from, session });
-    if (!thread && phone) {
+    if (!thread && phone && !isSystem) {
       thread = await Cliente.findOne({ phone, session });
       if (thread && thread.from !== from) {
         thread.from = from;
@@ -466,8 +472,8 @@ async function autoDownloadImpl(
             messages: [],
             createdAt: new Date(),
             firstMessageTime: new Date(),
-            // phone solo aquí si aún no va en $set (evita conflicto).
-            ...(phone ? {} : { phone: '' }),
+            // phone solo al crear si el mensaje es del cliente; si no, ''.
+            ...(phone && !isSystem ? {} : { phone: '' }),
           },
           $set: setDoc,
         },
@@ -475,7 +481,7 @@ async function autoDownloadImpl(
       );
     } else {
       Object.assign(thread, setDoc);
-      if (phone && !thread.phone) thread.phone = phone;
+      if (phone && !isSystem && !thread.phone) thread.phone = phone;
       await thread.save();
     }
 
