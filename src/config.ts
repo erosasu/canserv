@@ -102,11 +102,14 @@ export default {
   },
   aws_s3: {
     region: 'us-east-1',
-    access_key_id: 'AKIAXOQPDYH7KCIJYQXP', // Move to .env
-    secret_key: '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', // Move to .env
-    defaultBucketName: 'cdjwhatsapchats',
-    endpoint: 'https://s3.us-east-1.amazonaws.com', // Correct S3 endpoint
-    forcePathStyle: false, // Keep for path-style URLs
+    // Preferir variables de entorno; los valores locales solo son fallback de desarrollo.
+    access_key_id: process.env.AWS_ACCESS_KEY_ID || '',
+    secret_key: process.env.AWS_SECRET_ACCESS_KEY || '',
+    defaultBucketName:
+      process.env.WHATSAPP_CHATS_S3_BUCKET || 'cdjwhatsapchats',
+    endpoint:
+      process.env.AWS_S3_ENDPOINT || 'https://s3.us-east-1.amazonaws.com',
+    forcePathStyle: false,
   },
   openai: {
     model: 'gpt-4o',
