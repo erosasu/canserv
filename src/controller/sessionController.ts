@@ -25,8 +25,8 @@ import config from '../config';
 import CreateSessionUtil from '../util/createSessionUtil';
 import { callWebHook, contactToArray } from '../util/functions';
 import getAllTokens from '../util/getAllTokens';
-import { clientsArray, deleteSessionOnArray } from '../util/sessionUtil';
 import { withTimeout } from '../util/promiseTimeout';
+import { clientsArray, deleteSessionOnArray } from '../util/sessionUtil';
 
 function getSessionUtilSingleton(): CreateSessionUtil {
   return CreateSessionUtil.getInstance();

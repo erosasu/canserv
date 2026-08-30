@@ -7,7 +7,6 @@
  * - ENABLE_SESSION_WATCHDOG: 'false' para desactivar (default: activo)
  * - SESSION_WATCHDOG_INTERVAL_MS: intervalo de sonda (default 45000)
  * - SESSION_WATCHDOG_PROBE_MS: timeout de isConnected (default 12000)
- * - SESSION_WATCHDOG_COOLDOWN_MS: mínimo entre recuperaciones (default 120000)
  * - SESSION_WATCHDOG_FAILS: fallos consecutivos antes de recuperar (default 2)
  */
 import CreateSessionUtil from '../../util/createSessionUtil';
@@ -22,7 +21,6 @@ type WatchdogContext = {
 
 const DEFAULT_INTERVAL = 45 * 1000;
 const DEFAULT_PROBE = 12 * 1000;
-const DEFAULT_COOLDOWN = 120 * 1000;
 const DEFAULT_FAILS = 2;
 const INITIALIZING_MAX_MS = 3 * 60 * 1000;
 
