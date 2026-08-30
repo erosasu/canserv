@@ -16,7 +16,11 @@
 import { Chat } from '@wppconnect-team/wppconnect';
 import { Request, Response } from 'express';
 
-import { contactToArray, unlinkAsync } from '../util/functions';
+import {
+  contactToArray,
+  resolveExistingChatId,
+  unlinkAsync,
+} from '../util/functions';
 import { clientsArray } from '../util/sessionUtil';
 
 function returnSucess(res: any, session: any, phone: any, data: any) {
@@ -1440,17 +1444,32 @@ export async function getMessages(req: Request, res: Response) {
   const { phone } = req.params;
   const { count = 20, direction = 'before', id = null } = req.query;
   try {
-    const response = await req.client.getMessages(`${phone}`, {
+    const requested = String(phone || '');
+    const chatId = await resolveExistingChatId(
+      req.client,
+      requested,
+      String(req.session || '')
+    );
+    req.logger.info(
+      `[getMessages] session=${req.session} requested=${requested} resolved=${chatId}`
+    );
+    const response = await req.client.getMessages(chatId, {
       count: parseInt(count as string),
       direction: direction.toString() as any,
       id: id as string,
     });
-    return res.status(200).json({ status: 'success', response: response });
+    return res.status(200).json({
+      status: 'success',
+      response: response,
+      chatId,
+    });
   } catch (e) {
     req.logger.error(e);
-    return res
-      .status(401)
-      .json({ status: 'error', response: 'Error on open list', error: e });
+    return res.status(404).json({
+      status: 'error',
+      response: 'Chat not found',
+      error: e,
+    });
   }
 }
 

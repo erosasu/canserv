@@ -140,6 +140,217 @@ function phoneFromJid(jid: string): string {
   return normalizePhoneDigits(jid.split('@')[0]);
 }
 
+function serializeWid(value: unknown): string {
+  if (!value) return '';
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'object') {
+    const obj = value as { _serialized?: unknown };
+    if (typeof obj._serialized === 'string') return obj._serialized.trim();
+  }
+  return '';
+}
+
+function decodeChatIdInput(raw: string): string {
+  const input = String(raw || '').trim();
+  try {
+    return decodeURIComponent(input);
+  } catch {
+    return input;
+  }
+}
+
+/** Variantes MX: 521XXXXXXXXXX / 52XXXXXXXXXX / 10 dígitos locales. */
+export function phoneQueryVariants(raw: string): string[] {
+  const d = String(raw || '').replace(/\D/g, '');
+  const out: string[] = [];
+  const add = (v: string) => {
+    if (v && !out.includes(v)) out.push(v);
+  };
+  add(d);
+  if (d.startsWith('521') && d.length === 13) {
+    add(`52${d.slice(3)}`);
+    add(d.slice(3));
+  } else if (d.startsWith('52') && d.length === 12) {
+    add(`521${d.slice(2)}`);
+    add(d.slice(2));
+  } else if (d.length === 10) {
+    add(`52${d}`);
+    add(`521${d}`);
+  }
+  return out;
+}
+
+function phonesMatch(a: string, b: string): boolean {
+  const va = phoneQueryVariants(a);
+  const vb = new Set(phoneQueryVariants(b));
+  return va.some((x) => vb.has(x));
+}
+
+/** Candidatos de JID para un teléfono o from guardado en BD. */
+export function chatIdCandidates(raw: string): string[] {
+  const decoded = decodeChatIdInput(raw);
+  if (!decoded) return [];
+  const out: string[] = [];
+  const add = (v: string) => {
+    if (v && !out.includes(v)) out.push(v);
+  };
+
+  add(decoded);
+  if (decoded.includes('@lid') || decoded.includes('@g.us')) {
+    return out;
+  }
+
+  const user = decoded.includes('@')
+    ? decoded.split('@')[0]
+    : decoded.replace(/\D/g, '');
+  for (const digits of phoneQueryVariants(user)) {
+    add(`${digits}@c.us`);
+  }
+  return out;
+}
+
+async function listUserChats(client: any): Promise<any[]> {
+  const all: any[] = [];
+  const seen = new Set<string>();
+  let cursor = '';
+  for (let page = 0; page < 15; page++) {
+    const opts: Record<string, unknown> = { onlyUsers: true, count: 200 };
+    if (cursor) {
+      opts.id = cursor;
+      opts.direction = 'before';
+    }
+    const batch = (await client.listChats?.(opts)) || [];
+    if (!Array.isArray(batch) || !batch.length) break;
+    for (const chat of batch) {
+      const sid = serializeWid(chat?.id);
+      if (!sid || seen.has(sid)) continue;
+      seen.add(sid);
+      all.push(chat);
+    }
+    const lastId = serializeWid(batch[batch.length - 1]?.id);
+    if (!lastId || lastId === cursor || batch.length < 200) break;
+    cursor = lastId;
+  }
+  return all;
+}
+
+function chatLooksLikePhone(chat: any, wantPhones: string[]): boolean {
+  if (!wantPhones.length) return false;
+  const sid = serializeWid(chat?.id);
+  const contactId =
+    serializeWid(chat?.contact?.id) || String(chat?.contact?.id || '');
+  for (const jid of [sid, contactId]) {
+    if (!jid || jid.includes('@lid')) continue;
+    const digits = jid.split('@')[0].replace(/\D/g, '');
+    if (wantPhones.some((w) => phonesMatch(w, digits))) return true;
+  }
+  return false;
+}
+
+/**
+ * WhatsApp Web guarda muchos hilos como @lid. getPnLidEntry(phone) a menudo
+ * devuelve un LID de *contacto* que no es el chat (`Chat not found for NNN@lid`).
+ * Hay que usar el JID que sí está en la lista de chats.
+ */
+export async function resolveExistingChatId(
+  client: any,
+  raw: string,
+  sessionHint?: string
+): Promise<string> {
+  const decoded = decodeChatIdInput(raw);
+  const candidates = chatIdCandidates(decoded);
+  if (!decoded && !candidates.length) return String(raw || '');
+
+  const wantPhones = decoded.includes('@lid')
+    ? []
+    : phoneQueryVariants(
+        decoded.includes('@') ? decoded.split('@')[0] : decoded
+      );
+
+  const tryGetChat = async (id: string): Promise<string> => {
+    if (!id || typeof client?.getChatById !== 'function') return '';
+    try {
+      const chat = await client.getChatById(id);
+      const sid =
+        serializeWid(chat?.id) || (typeof chat?.id === 'string' ? chat.id : '');
+      // getChatById(phone@c.us) puede devolver un LID de contacto que no es chat.
+      if (!sid) return '';
+      if (sid.includes('@lid') && !id.includes('@lid')) return '';
+      return sid;
+    } catch {
+      return '';
+    }
+  };
+
+  // 1) JID ya conocido (@lid / @c.us guardado): si el chat existe, listo.
+  for (const id of candidates) {
+    const sid = await tryGetChat(id);
+    if (sid) return sid;
+  }
+
+  // 2) Mongo: el webhook suele haber guardado el @lid real junto al teléfono.
+  try {
+    const session = String(client?.session || sessionHint || '').trim();
+    if (session) {
+      const or: Record<string, unknown>[] = [];
+      if (candidates.length) or.push({ from: { $in: candidates } });
+      if (wantPhones.length) or.push({ phone: { $in: wantPhones } });
+      if (or.length) {
+        const docs = await Cliente.find({ session, $or: or })
+          .select('from phone')
+          .lean();
+        const ordered = [
+          ...docs.filter((d: any) => String(d?.from || '').includes('@lid')),
+          ...docs.filter((d: any) => !String(d?.from || '').includes('@lid')),
+        ];
+        for (const doc of ordered) {
+          const from = String(doc?.from || '').trim();
+          const sid = await tryGetChat(from);
+          if (sid) return sid;
+        }
+      }
+    }
+  } catch {
+    /* Mongo no disponible o esquema distinto */
+  }
+
+  // 3) Buscar en la lista de chats por número (nunca usar LID de contacto).
+  if (wantPhones.length) {
+    let list: any[] = [];
+    try {
+      list = await listUserChats(client);
+    } catch {
+      list = [];
+    }
+    for (const chat of list) {
+      if (chatLooksLikePhone(chat, wantPhones)) {
+        const sid = serializeWid(chat?.id);
+        if (sid) return sid;
+      }
+    }
+    if (typeof client?.getPnLidEntry === 'function') {
+      for (const chat of list) {
+        const sid = serializeWid(chat?.id);
+        if (!sid || !sid.includes('@lid')) continue;
+        try {
+          const entry = await client.getPnLidEntry(sid);
+          const pn =
+            serializeWid(entry?.phoneNumber) ||
+            String(entry?.phoneNumber || '');
+          const digits = pn.replace(/\D/g, '');
+          if (digits && wantPhones.some((w) => phonesMatch(w, digits))) {
+            return sid;
+          }
+        } catch {
+          /* siguiente chat */
+        }
+      }
+    }
+  }
+
+  return candidates[0] || decoded;
+}
+
 /**
  * Identidad del hilo para BD/webhook:
  * - `from`: JID del chat (@c.us / @lid)

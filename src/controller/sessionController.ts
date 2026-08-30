@@ -26,13 +26,10 @@ import CreateSessionUtil from '../util/createSessionUtil';
 import { callWebHook, contactToArray } from '../util/functions';
 import getAllTokens from '../util/getAllTokens';
 import { clientsArray, deleteSessionOnArray } from '../util/sessionUtil';
+import { withTimeout } from '../util/promiseTimeout';
 
-let sessionUtilSingleton: CreateSessionUtil | undefined;
 function getSessionUtilSingleton(): CreateSessionUtil {
-  if (!sessionUtilSingleton) {
-    sessionUtilSingleton = new CreateSessionUtil();
-  }
-  return sessionUtilSingleton;
+  return CreateSessionUtil.getInstance();
 }
 
 async function downloadFileFunction(
@@ -141,7 +138,7 @@ export async function startAllSessions(req: Request, res: Response) {
   }
 
   allSessions.map(async (session: string) => {
-    const util = new CreateSessionUtil();
+    const util = getSessionUtilSingleton();
     await util.opendata(req, session);
   });
 
@@ -260,11 +257,15 @@ export async function closeSession(req: Request, res: Response) {
     const liveClient = req.client;
     try {
       if (liveClient && typeof (liveClient as any).close === 'function') {
-        await (liveClient as any).close();
+        await withTimeout(
+          Promise.resolve((liveClient as any).close()),
+          10000,
+          `closeSession(${session})`
+        );
       }
     } catch (closeErr) {
       req.logger.warn(
-        `[${session}] close() falló (se limpia memoria igual): ${
+        `[${session}] close() falló o timeout (se limpia memoria igual): ${
           (closeErr as Error)?.message || closeErr
         }`
       );

@@ -22,6 +22,9 @@ const chatSchema = mongoose.Schema({
   type_user: { type: String, default: 'cliente potencial' },
   system_prompt: { type: String, default: '' },
   ai_agent_enabled: { type: Boolean, default: false },
+  agenda_observer_enabled: { type: Boolean, default: false },
+  agenda_observer_msg_count: { type: Number, default: 0 },
+  agenda_observer_last_run_at: { type: Date },
   ai_agent_last_message_id: { type: String, default: '' },
   messages: [
     {

@@ -158,11 +158,18 @@ export default async function processMediaContent(
           ContentType: message.mimetype || 'application/octet-stream',
           // El bucket tiene ACLs deshabilitadas (Bucket owner enforced); enviar
           // ACL:'public-read' provoca AccessControlListNotSupported (HTTP 400).
-          // El acceso público debe darse por política de bucket, no por ACL.
         })
       );
 
-      s3Url = `https://${config.aws_s3.defaultBucketName}.s3.${config.aws_s3.region}.amazonaws.com/${fileName}`;
+      // Persistimos siempre la URL canónica del objeto en S3 (no CloudFront ni
+      // /wa-media). El CDN se aplica al leer el chat en la API / el frontend.
+      const region = config.aws_s3.region || 'us-east-1';
+      const bucket = config.aws_s3.defaultBucketName;
+      const encodedKey = fileName
+        .split('/')
+        .map((seg) => encodeURIComponent(seg))
+        .join('/');
+      s3Url = `https://${bucket}.s3.${region}.amazonaws.com/${encodedKey}`;
     }
 
     if (!s3Url) return null;

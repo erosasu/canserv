@@ -14,6 +14,7 @@ import config from './config';
 import { convert } from './mapper/index';
 import routes from './routes';
 import { startNgrokMonitoring } from './src/services/ngrokManager.js';
+import { startSessionWatchdog } from './src/services/sessionWatchdog';
 import { ServerOptions } from './types/ServerOptions';
 import {
   createFolders,
@@ -125,6 +126,19 @@ export function initServer(serverOptions: Partial<ServerOptions>): {
       } catch (error) {
         logger.warn('⚠️ No se pudo iniciar el monitoreo de ngrok:', error);
       }
+    }
+
+    try {
+      startSessionWatchdog({
+        serverOptions,
+        logger,
+        io,
+      });
+    } catch (error) {
+      logger.warn(
+        '⚠️ No se pudo iniciar el watchdog de sesión WhatsApp:',
+        error
+      );
     }
   });
 

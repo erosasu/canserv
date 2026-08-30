@@ -32,14 +32,39 @@ import {
   isStatusOrBroadcastMessage,
   startHelper,
 } from './functions';
-import { clientsArray, eventEmitter } from './sessionUtil';
+import { withTimeout } from './promiseTimeout';
+import {
+  clientsArray,
+  deleteSessionOnArray,
+  eventEmitter,
+} from './sessionUtil';
 import Factory from './tokenStore/factory';
 
 const execAsync = promisify(exec);
 
+type SessionRuntime = {
+  serverOptions: any;
+  logger: any;
+  io: any;
+  body: any;
+};
+
 export default class CreateSessionUtil {
+  private static instance: CreateSessionUtil | undefined;
+
+  static getInstance(): CreateSessionUtil {
+    if (!CreateSessionUtil.instance) {
+      CreateSessionUtil.instance = new CreateSessionUtil();
+    }
+    return CreateSessionUtil.instance;
+  }
+
   /** Una sola limpieza por sesión a la vez; las demás esperan la misma promesa */
   private static killChromeProcessesPromises = new Map<string, Promise<void>>();
+  private static recoveringSessions = new Set<string>();
+  private static lastRecoverAt = new Map<string, number>();
+  private static sessionRuntime = new Map<string, SessionRuntime>();
+  private static readonly RECOVER_COOLDOWN_MS = 120000;
 
   /**
    * Serializa operaciones de sesión (start/close) para evitar
@@ -61,6 +86,109 @@ export default class CreateSessionUtil {
   /** Rompe una cola colgada (p.ej. create() eterno) para permitir un nuevo start-session. */
   private resetSessionQueue(session: string): void {
     CreateSessionUtil.sessionOpChain.set(session, Promise.resolve());
+  }
+
+  isRecovering(session: string): boolean {
+    return CreateSessionUtil.recoveringSessions.has(session);
+  }
+
+  getSessionRuntime(session: string): SessionRuntime | undefined {
+    return CreateSessionUtil.sessionRuntime.get(session);
+  }
+
+  private rememberSessionRuntime(session: string, req: any): void {
+    CreateSessionUtil.sessionRuntime.set(session, {
+      serverOptions: req.serverOptions,
+      logger: req.logger,
+      io: req.io,
+      body: req.body || {},
+    });
+  }
+
+  /**
+   * Recupera una sesión colgada: close (con timeout) + matar Chromium + start-session.
+   * Equivale al procedimiento manual disconnect-session + start-session.
+   */
+  async recoverHungSession(
+    req: any,
+    session: string,
+    reason: string
+  ): Promise<void> {
+    if (!session) return;
+    if (CreateSessionUtil.recoveringSessions.has(session)) return;
+
+    const cooldown = Math.max(
+      30000,
+      parseInt(process.env.SESSION_WATCHDOG_COOLDOWN_MS || '', 10) ||
+        CreateSessionUtil.RECOVER_COOLDOWN_MS
+    );
+    const last = CreateSessionUtil.lastRecoverAt.get(session) || 0;
+    if (Date.now() - last < cooldown) {
+      req?.logger?.info?.(
+        `[${session}] Recuperación omitida (cooldown ${Math.round(
+          cooldown / 1000
+        )}s)`
+      );
+      return;
+    }
+
+    CreateSessionUtil.recoveringSessions.add(session);
+    CreateSessionUtil.lastRecoverAt.set(session, Date.now());
+    this.resetSessionQueue(session);
+
+    const logger = req?.logger;
+    logger?.warn?.(
+      `[${session}] API/CDP bloqueado (${reason}). Recuperando: disconnect-session + start-session.`
+    );
+
+    const client = (clientsArray as any)[session];
+    try {
+      if (client && typeof client.close === 'function') {
+        await withTimeout(
+          Promise.resolve(client.close()).catch(() => undefined),
+          10000,
+          `close(${session})`
+        );
+      }
+    } catch (err) {
+      logger?.warn?.(
+        `[${session}] close() no respondió: ${(err as Error)?.message || err}`
+      );
+    }
+
+    try {
+      if (req?.serverOptions?.customUserDataDir) {
+        await this.killChromeProcessesForUserDataDir(
+          req.serverOptions.customUserDataDir + session,
+          logger,
+          session
+        );
+      }
+    } catch (err) {
+      logger?.warn?.(
+        `[${session}] kill Chrome: ${(err as Error)?.message || err}`
+      );
+    }
+
+    try {
+      deleteSessionOnArray(session);
+    } catch {
+      (clientsArray as any)[session] = undefined;
+    }
+    this.resetSessionQueue(session);
+
+    try {
+      await this.createSessionUtil(req, clientsArray, session);
+      logger?.info?.(`[${session}] Sesión recuperada (start-session).`);
+    } catch (err) {
+      logger?.error?.(
+        `[${session}] Falló start-session en recuperación: ${
+          (err as Error)?.message || err
+        }`
+      );
+    } finally {
+      CreateSessionUtil.recoveringSessions.delete(session);
+    }
   }
 
   /** Límite de líneas de consola por sesión para "Waiting for QRCode Scan" (evita spam en sesiones sin vincular). */
@@ -389,7 +517,9 @@ export default class CreateSessionUtil {
       }
 
       client.status = 'INITIALIZING';
+      client._initAt = Date.now();
       client.config = req.body;
+      this.rememberSessionRuntime(session, req);
 
       // Resetear flag de reinicio si existe
       client._restarting = false;
