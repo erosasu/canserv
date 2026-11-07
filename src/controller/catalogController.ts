@@ -15,6 +15,7 @@
  */
 import { Request, Response } from 'express';
 
+import { normalizeCatalogImage } from '../util/catalogImage';
 import { createCatalogLink } from '../util/functions';
 
 export async function getProducts(req: Request, res: Response) {
@@ -301,9 +302,18 @@ export async function addProduct(req: Request, res: Response) {
     retailerId,
     currency = 'BRL',
   } = req.body;
-  if (!name || !image || price === undefined || price === null || price === '')
-    return res.status(401).send({
-      message: 'name, price and image was not informed',
+  const imageNorm = normalizeCatalogImage(image);
+  if (
+    !name ||
+    !imageNorm ||
+    price === undefined ||
+    price === null ||
+    price === ''
+  )
+    return res.status(400).json({
+      status: 'Error',
+      message:
+        'name, price and image are required. image must be a JPEG/PNG data URL, raw base64, or an https URL.',
     });
 
   // wa-js createProduct: Product.priceAmount1000 = price * 10000.
@@ -311,7 +321,8 @@ export async function addProduct(req: Request, res: Response) {
   const priceNum =
     typeof price === 'string' ? parseFloat(price) : Number(price);
   if (Number.isNaN(priceNum) || priceNum < 0.01) {
-    return res.status(400).send({
+    return res.status(400).json({
+      status: 'Error',
       message:
         'price must be a positive number in main currency units (e.g. 1500.50 for MXN), per wa-js createProduct example',
     });
@@ -343,7 +354,7 @@ export async function addProduct(req: Request, res: Response) {
   try {
     const result = await req.client.createProduct(
       name,
-      image,
+      imageNorm,
       descNorm,
       priceNum,
       false,

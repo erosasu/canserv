@@ -22,6 +22,7 @@ import {
   startAllSessions,
 } from './util/functions';
 import { createLogger } from './util/logger';
+import { coerceJsonSendBody } from './util/jsonSendBody';
 
 dotenv.config();
 //require('dotenv').config();
@@ -68,7 +69,16 @@ export function initServer(serverOptions: Partial<ServerOptions>): {
     res.send = async function (data: any) {
       const content = req.headers['content-type'];
       if (content == 'application/json') {
-        data = JSON.parse(data);
+        const parsed = coerceJsonSendBody(data);
+        if (
+          parsed == null ||
+          typeof parsed !== 'object' ||
+          Buffer.isBuffer(parsed)
+        ) {
+          res.send = oldSend;
+          return res.send(data);
+        }
+        data = parsed;
 
         if (!data.session) data.session = req.client ? req.client.session : '';
         if (data.mapper && req.serverOptions.mapper.enable) {
