@@ -16,6 +16,10 @@
 import { Request, Response } from 'express';
 
 import { normalizeCatalogImage } from '../util/catalogImage';
+import {
+  CatalogPage,
+  ensureCatalogImageUpload,
+} from '../util/ensureCatalogImageUpload';
 import { createCatalogLink } from '../util/functions';
 
 export async function getProducts(req: Request, res: Response) {
@@ -352,6 +356,13 @@ export async function addProduct(req: Request, res: Response) {
       : undefined;
 
   try {
+    const page = (req.client as { page?: CatalogPage }).page;
+    if (page?.evaluate) {
+      const loaded = await ensureCatalogImageUpload(page);
+      if (!loaded.ok) {
+        console.error('catalog image module', loaded);
+      }
+    }
     const result = await req.client.createProduct(
       name,
       imageNorm,
