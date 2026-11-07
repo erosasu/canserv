@@ -21,8 +21,8 @@ import {
   setMaxListners,
   startAllSessions,
 } from './util/functions';
-import { createLogger } from './util/logger';
 import { coerceJsonSendBody } from './util/jsonSendBody';
+import { createLogger } from './util/logger';
 
 dotenv.config();
 //require('dotenv').config();
