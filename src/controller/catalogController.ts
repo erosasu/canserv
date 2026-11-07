@@ -320,17 +320,19 @@ export async function addProduct(req: Request, res: Response) {
         'name, price and image are required. image must be a JPEG/PNG data URL, raw base64, or an https URL.',
     });
 
-  // wa-js createProduct: Product.priceAmount1000 = price * 10000.
-  // El ejemplo oficial usa price como monto en unidad principal (ej. 89.90), no centavos.
+  // El body trae el precio en pesos (1500.50). WhatsApp guarda milésimas
+  // (precio * 1000) y wa-js hace priceAmount1000 = price * 10000, así que
+  // 1500.50 se publicaba como 15005.00. Se recorre un decimal antes de enviarlo.
   const priceNum =
     typeof price === 'string' ? parseFloat(price) : Number(price);
   if (Number.isNaN(priceNum) || priceNum < 0.01) {
     return res.status(400).json({
       status: 'Error',
       message:
-        'price must be a positive number in main currency units (e.g. 1500.50 for MXN), per wa-js createProduct example',
+        'price must be a positive number in main currency units (e.g. 1500.50 for MXN)',
     });
   }
+  const priceForCatalog = Math.round(priceNum * 1000) / 10000;
 
   const urlNorm =
     url !== undefined && url !== null && String(url).trim() !== ''
@@ -367,7 +369,7 @@ export async function addProduct(req: Request, res: Response) {
       name,
       imageNorm,
       descNorm,
-      priceNum,
+      priceForCatalog,
       false,
       urlNorm,
       retailerNorm,
